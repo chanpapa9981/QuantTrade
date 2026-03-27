@@ -74,6 +74,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("lifecycle-filter", html)
         self.assertIn("run-filter", html)
         self.assertIn("side-filter", html)
+        self.assertIn("broker-filter", html)
         self.assertIn("focus-filter", html)
         self.assertIn("selected-context", html)
         self.assertIn("Deep Link", html)

@@ -726,6 +726,18 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <option value="BUY">Buy</option>
               <option value="SELL">Sell</option>
             </select>
+            <label for="broker-filter">Broker</label>
+            <select id="broker-filter">
+              <option value="all">All broker states</option>
+              <option value="pending_new">pending_new</option>
+              <option value="working">working</option>
+              <option value="replaced">replaced</option>
+              <option value="partially_filled">partially_filled</option>
+              <option value="filled">filled</option>
+              <option value="cancelled">cancelled</option>
+              <option value="rejected">rejected</option>
+              <option value="local_skipped">local_skipped</option>
+            </select>
             <label for="focus-filter">Focus</label>
             <select id="focus-filter">
               <option value="all">All orders</option>
@@ -860,12 +872,14 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const runId = params.get("run") || "all";
       const lifecycleFilter = params.get("filter") || "all";
       const side = params.get("side") || "all";
+      const broker = params.get("broker") || "all";
       const focus = params.get("focus") || "all";
       const orderId = params.get("order") || "";
       return {{
         runId: availableRunIds().includes(runId) ? runId : "all",
         lifecycleFilter: ["all", "filled", "cancelled", "open", "repriced"].includes(lifecycleFilter) ? lifecycleFilter : "all",
         side: ["all", "BUY", "SELL"].includes(side) ? side : "all",
+        broker: ["all", "pending_new", "working", "replaced", "partially_filled", "filled", "cancelled", "rejected", "local_skipped"].includes(broker) ? broker : "all",
         focus: ["all", "anomalies"].includes(focus) ? focus : "all",
         orderId,
       }};
@@ -877,6 +891,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       if (state.runId !== "all") params.set("run", state.runId);
       if (state.lifecycleFilter !== "all") params.set("filter", state.lifecycleFilter);
       if (state.side !== "all") params.set("side", state.side);
+      if (state.broker !== "all") params.set("broker", state.broker);
       if (state.focus !== "all") params.set("focus", state.focus);
       if (state.orderId) params.set("order", state.orderId);
       const hash = params.toString() ? `#${{params.toString()}}` : "";
@@ -890,6 +905,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("run-filter").value = state.runId;
       document.getElementById("lifecycle-filter").value = state.lifecycleFilter;
       document.getElementById("side-filter").value = state.side;
+      document.getElementById("broker-filter").value = state.broker;
       document.getElementById("focus-filter").value = state.focus;
     }}
     function filteredLifecycleCount() {{
@@ -901,6 +917,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       bits.push(state.runId === "all" ? "Run: all" : `Run: ${{state.runId}}`);
       bits.push(`Status: ${{state.lifecycleFilter}}`);
       bits.push(`Side: ${{state.side === "all" ? "all" : state.side}}`);
+      bits.push(`Broker: ${{state.broker}}`);
       bits.push(`Focus: ${{state.focus}}`);
       bits.push(`Matches: ${{filteredLifecycleCount()}}`);
       bits.push(state.orderId ? `Order: ${{state.orderId}}` : "Order: none selected");
@@ -951,6 +968,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const rows = payload.recent_orders.filter(order => {{
         if (state.runId !== "all" && order.run_id !== state.runId) return false;
         if (state.side !== "all" && order.side !== state.side) return false;
+        if (state.broker !== "all" && order.broker_status !== state.broker) return false;
         return true;
       }});
       document.getElementById("orders-table").innerHTML = rows.map(order => `
@@ -984,6 +1002,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const scoped = payload.order_lifecycles.filter(order => {{
         if (state.runId !== "all" && order.run_id !== state.runId) return false;
         if (state.side !== "all" && order.side !== state.side) return false;
+        if (state.broker !== "all" && order.latest_broker_status !== state.broker) return false;
         return true;
       }});
       if (state.lifecycleFilter === "all") return scoped;
@@ -1102,6 +1121,10 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.side = event.target.value || "all";
       renderAll();
     }});
+    document.getElementById("broker-filter").addEventListener("change", event => {{
+      state.broker = event.target.value || "all";
+      renderAll();
+    }});
     document.getElementById("focus-filter").addEventListener("change", event => {{
       state.focus = event.target.value || "all";
       renderAll();
@@ -1110,6 +1133,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.runId = "all";
       state.lifecycleFilter = "all";
       state.side = "all";
+      state.broker = "all";
       state.focus = "all";
       state.orderId = "";
       renderAll();
@@ -1120,6 +1144,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.runId = next.runId;
       state.lifecycleFilter = next.lifecycleFilter;
       state.side = next.side;
+      state.broker = next.broker;
       state.focus = next.focus;
       state.orderId = next.orderId;
       renderAll();

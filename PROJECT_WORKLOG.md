@@ -94,6 +94,7 @@
 | W-041 | Dashboard | 增加历史页异常聚焦模式 | 支持一键聚焦未完成、撤单、重定价等更值得排查的订单 | 已完成 |
 | W-042 | 工程规范 | 为项目代码补充系统性中文注释并固化规则 | 让主流程、状态机和测试场景对新人也足够可读 | 已完成 |
 | W-043 | 执行层 | 增加 broker 状态语义映射准备层 | 为订单事件补充 broker_status/status_detail，并同步到查询与历史页 | 已完成 |
+| W-044 | Dashboard | 增加历史页 broker 状态筛选 | 支持按 pending_new/working/replaced/filled 等 broker 语义过滤订单生命周期 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -182,6 +183,7 @@
 | 2026-03-28 | 历史页异常聚焦模式 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
 | 2026-03-28 | 系统性中文注释覆盖与规范固化 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
 | 2026-03-28 | broker 状态语义映射准备层 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
+| 2026-03-28 | 历史页 broker 状态筛选 | `PYTHONPATH=src python3 -m unittest tests.test_history_html -v` | 通过 |
 
 ---
 
@@ -210,6 +212,7 @@
 | 2026-03-28 | 异常聚焦优先做成轻量前端模式而不是新增独立页面 | 异常订单的判定逻辑仍在演化，先做可调整的前端聚焦模式更灵活 | 可以快速提升排错效率，同时保留后续迭代异常定义的空间 |
 | 2026-03-28 | 后续代码默认强制补充中文注释 | 当前项目已进入中期，模块变多后仅靠函数名和结构已不足以保证可维护性 | 以后新增功能时，代码可读性和教学性将成为默认交付标准之一 |
 | 2026-03-28 | 先补 broker 语义映射准备层，再接真实券商 | 直接把当前本地状态机硬绑到 Schwab 容易造成概念错位，后期改造成本更高 | 订单事件现在开始同时拥有本地状态和更接近券商语义的状态字段 |
+| 2026-03-28 | broker 语义一旦落到历史页，就要同步提供筛选能力 | 只有展示没有筛选，排错时仍然要手动扫表，价值会打折扣 | 历史页现在既能按本地状态筛，也能按 broker 语义筛 |
 
 ---
 
@@ -555,6 +558,18 @@
 | 为什么这么做 | 因为 `filled/open/cancelled` 这些本地状态虽然够当前项目内部使用，但还不足以表达真实券商世界里的 `pending_new/working/replaced/...` 语义；越早补这层映射，后面越不容易返工。 |
 | 未完成 | 继续细化 broker 状态映射表、补更多 cancel/replace reason、接真实 Schwab 状态时做最终对齐 |
 | 备注 | 这一步属于“实盘接入前的概念对齐工作”，价值在于降低后续接券商 API 的语义落差 |
+
+### 2026-03-28 第 27 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让历史页不仅能显示 broker 语义，还能直接按 broker 状态收缩排错范围 |
+| 输入 | 已有 `broker_status` / `status_detail` 字段和历史页订单生命周期表 |
+| 产出 | `broker-filter`、URL hash 同步、orders/lifecycles 联动的 broker 状态筛选 |
+| 结果 | 现在历史页可以直接按 `pending_new/working/replaced/filled/cancelled/rejected` 等 broker 语义过滤 |
+| 为什么这么做 | 因为 broker 语义真正有价值的场景，是快速找出“哪些单在 working、哪些单被 replaced、哪些单被 rejected”；没有筛选，这层信息只会停留在展示层。 |
+| 未完成 | broker 状态摘要卡片、更细的 broker detail 聚合、真实 Schwab 状态对齐 |
+| 备注 | 这一步把 broker 语义从“被记录”推进到“可直接用于排错” |
 
 ---
 
