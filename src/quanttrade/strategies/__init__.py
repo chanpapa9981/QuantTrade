@@ -1,1 +1,1 @@
-"""Strategy package."""
+"""策略模块包。"""

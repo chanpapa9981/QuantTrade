@@ -1,3 +1,14 @@
+"""应用装配层。
+
+这个文件相当于整个 QuantTrade 的“总调度台”：
+1. 读取配置；
+2. 初始化日志和数据目录；
+3. 把策略、风控、执行、数据仓储这些模块拼起来；
+4. 对外暴露给 CLI 调用的高层能力。
+
+小白可以把它理解成“把所有零件接线后，提供一组可直接操作的按钮”。
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -20,12 +31,23 @@ from quanttrade.strategies.atr_dtf import AtrDynamicTrendFollowingStrategy
 
 
 class QuantTradeApp:
+    """QuantTrade 的高层门面对象。
+
+    CLI 不直接操作底层模块，而是统一通过这个类调用。
+    这样做的好处是：
+    1. 命令行层只负责接收参数和打印结果；
+    2. 真正的业务流程集中在这里，更容易维护；
+    3. 以后如果接 Web API，也可以继续复用这些方法。
+    """
+
     def __init__(self, config_path: str) -> None:
+        """加载配置，并提前把运行所需环境准备好。"""
         self.settings = load_settings(config_path)
         configure_logging()
         ensure_data_dirs(self.settings.data.duckdb_path)
 
     def doctor(self) -> dict[str, object]:
+        """返回当前生效配置，方便确认系统到底会按什么参数运行。"""
         return {
             "app": asdict(self.settings.app),
             "strategy": asdict(self.settings.strategy),
@@ -36,11 +58,13 @@ class QuantTradeApp:
         }
 
     def run_sample(self) -> dict[str, object]:
+        """运行一个人造样例 bar，用来快速验证主链路是否能打通。"""
         strategy = AtrDynamicTrendFollowingStrategy(self.settings.strategy)
         risk_engine = RiskEngine(self.settings.risk)
         execution_engine = SimulatedExecutionEngine(self.settings.execution)
         engine = BacktestEngine(strategy, risk_engine, execution_engine)
 
+        # 这里故意构造一根“看起来会触发入场”的 bar，方便快速做冒烟测试。
         market_bar = MarketBar(
             timestamp=datetime.now(timezone.utc),
             open=100.0,
@@ -59,6 +83,10 @@ class QuantTradeApp:
         return asdict(result)
 
     def import_csv(self, csv_path: str, symbol: str, timeframe: str = "1d") -> dict[str, object]:
+        """把 CSV 行情导入数据库。
+
+        这里先拿数据库锁，是为了避免导入和回测同时写同一个 DuckDB 文件时产生冲突。
+        """
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             inserted = import_bars_from_csv(
@@ -75,9 +103,11 @@ class QuantTradeApp:
         }
 
     def backtest_symbol(self, symbol: str, timeframe: str = "1d", initial_equity: float = 100_000.0) -> dict[str, object]:
+        """对单个标的执行一次不落库的历史回测。"""
         with database_lock(self.settings.data.duckdb_path):
             repository = BarRepository(self.settings.data.duckdb_path)
             bars = repository.fetch_bars(symbol=symbol, timeframe=timeframe)
+        # 策略对象会直接读取 config 里的 symbol，所以这里要把本次调用参数同步进去。
         strategy_config = self.settings.strategy
         strategy_config.symbol = symbol
         strategy = AtrDynamicTrendFollowingStrategy(strategy_config)
@@ -93,12 +123,19 @@ class QuantTradeApp:
         timeframe: str = "1d",
         initial_equity: float = 100_000.0,
     ) -> dict[str, object]:
+        """执行一次会落库的回测，并记录执行生命周期。
+
+        这一步比 `backtest_symbol` 多了两层保护：
+        1. execution_lock：阻止同标的同周期被重复触发；
+        2. backtest_executions：记录这次运行是开始了、完成了、失败了还是中断恢复了。
+        """
         execution_id = ""
         recovered_executions = 0
         with execution_lock(self.settings.data.duckdb_path, symbol=symbol, timeframe=timeframe, blocking=False):
             with database_lock(self.settings.data.duckdb_path):
                 create_schema(self.settings.data.duckdb_path)
                 repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                # 如果上一次运行异常中断，先把旧的 running 状态修正为 abandoned。
                 recovered_executions = repository.recover_stale_executions(symbol=symbol, timeframe=timeframe)
                 execution_id = repository.create_execution(
                     symbol=symbol,
@@ -136,18 +173,21 @@ class QuantTradeApp:
         }
 
     def recent_backtest_runs(self, limit: int = 10) -> dict[str, object]:
+        """查询最近几次已持久化的回测结果。"""
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"runs": repository.fetch_recent_runs(limit=limit)}
 
     def recent_backtest_executions(self, limit: int = 10) -> dict[str, object]:
+        """查询最近几次“尝试执行回测”的记录，包括失败和中断。"""
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"executions": repository.fetch_recent_executions(limit=limit)}
 
     def backtest_run_detail(self, run_id: str) -> dict[str, object]:
+        """查询某次回测的完整明细。"""
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
@@ -155,24 +195,28 @@ class QuantTradeApp:
             return {"detail": detail}
 
     def recent_order_events(self, limit: int = 20) -> dict[str, object]:
+        """查询最近的订单事件，用于快速排查最近发生了什么。"""
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"orders": repository.fetch_recent_order_events(limit=limit)}
 
     def order_detail(self, order_id: str) -> dict[str, object]:
+        """查询某一笔订单从创建到结束的完整生命周期。"""
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"detail": repository.fetch_order_detail(order_id=order_id)}
 
     def recent_audit_events(self, limit: int = 20) -> dict[str, object]:
+        """查询最近的审计日志，便于查看策略和风控为何这么决定。"""
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"audit_events": repository.fetch_recent_audit_events(limit=limit)}
 
     def dashboard_history(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, object]:
+        """把历史数据整理成前端更容易消费的结构。"""
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
@@ -186,6 +230,7 @@ class QuantTradeApp:
         initial_equity: float = 100_000.0,
         output_path: str = "var/reports/backtest.json",
     ) -> dict[str, object]:
+        """导出回测 JSON 报告，适合给脚本或其它工具继续消费。"""
         payload = self.backtest_symbol(symbol=symbol, timeframe=timeframe, initial_equity=initial_equity)
         written_path = export_backtest_result(payload, output_path)
         return {
@@ -201,6 +246,7 @@ class QuantTradeApp:
         timeframe: str = "1d",
         initial_equity: float = 100_000.0,
     ) -> dict[str, object]:
+        """生成单次回测的 dashboard 数据快照。"""
         backtest_payload = self.backtest_symbol(symbol=symbol, timeframe=timeframe, initial_equity=initial_equity)
         return build_dashboard_payload(backtest_payload)
 
@@ -211,6 +257,7 @@ class QuantTradeApp:
         initial_equity: float = 100_000.0,
         output_path: str = "var/reports/dashboard.json",
     ) -> dict[str, object]:
+        """导出 dashboard 用的 JSON 数据。"""
         payload = self.dashboard_snapshot(symbol=symbol, timeframe=timeframe, initial_equity=initial_equity)
         written_path = export_backtest_result(payload, output_path)
         return {
@@ -227,6 +274,7 @@ class QuantTradeApp:
         initial_equity: float = 100_000.0,
         output_path: str = "var/reports/dashboard.html",
     ) -> dict[str, object]:
+        """导出单次回测的静态 HTML 看板。"""
         payload = self.dashboard_snapshot(symbol=symbol, timeframe=timeframe, initial_equity=initial_equity)
         written_path = render_dashboard_html(payload, output_path)
         return {
@@ -242,6 +290,7 @@ class QuantTradeApp:
         events_limit: int = 20,
         output_path: str = "var/reports/history.html",
     ) -> dict[str, object]:
+        """导出历史回测的静态 HTML 页面。"""
         payload = self.dashboard_history(runs_limit=runs_limit, events_limit=events_limit)
         written_path = render_history_html(payload, output_path)
         return {

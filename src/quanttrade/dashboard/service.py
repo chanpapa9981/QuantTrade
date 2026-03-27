@@ -1,7 +1,13 @@
+"""Dashboard 数据整理层。
+
+这个模块不负责画页面，而是负责把原始回测/历史数据重新整理成前端更容易消费的结构。
+"""
+
 from __future__ import annotations
 
 
 def _build_order_lifecycles(orders: list[dict[str, object]]) -> list[dict[str, object]]:
+    """把订单事件按 `order_id` 归并成历史页使用的生命周期摘要。"""
     grouped: dict[str, list[dict[str, object]]] = {}
     for order in orders:
         order_id = str(order.get("order_id", ""))
@@ -11,6 +17,9 @@ def _build_order_lifecycles(orders: list[dict[str, object]]) -> list[dict[str, o
     for order_id, events in grouped.items():
         if not order_id:
             continue
+        # 这里的 orders 输入通常是按时间倒序排列，所以：
+        # - 最后一个事件反而是“最早发生”的；
+        # - 第一个事件反而是“最新状态”。
         first = events[-1]
         last = events[0]
         status_path = [str(event.get("status", "")) for event in reversed(events)]
@@ -33,6 +42,7 @@ def _build_order_lifecycles(orders: list[dict[str, object]]) -> list[dict[str, o
 
 
 def _build_order_lifecycle_details(orders: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+    """把订单事件按 `order_id` 聚合成明细字典，供前端点击联动时直接读取。"""
     grouped: dict[str, list[dict[str, object]]] = {}
     for order in orders:
         order_id = str(order.get("order_id", ""))
@@ -45,6 +55,7 @@ def _build_order_lifecycle_details(orders: list[dict[str, object]]) -> dict[str,
 
 
 def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, object]:
+    """把单次回测结果整理成 dashboard 页面使用的数据格式。"""
     metrics = backtest_result["metrics"]
     trades = backtest_result["trades"]
     orders = backtest_result["orders"]
@@ -57,6 +68,7 @@ def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, obj
     latest_drawdown = drawdown_curve[-1]["drawdown_pct"] if drawdown_curve else 0.0
 
     return {
+        # summary_cards 是顶部卡片的直接输入，前端不需要再额外拼装。
         "summary_cards": [
             {"id": "ending_equity", "label": "Ending Equity", "value": latest_equity},
             {"id": "total_return_pct", "label": "Total Return %", "value": metrics["total_return_pct"]},
@@ -100,6 +112,7 @@ def build_history_payload(
     orders: list[dict[str, object]],
     audit_events: list[dict[str, object]],
 ) -> dict[str, object]:
+    """把历史运行结果整理成历史页所需的聚合结构。"""
     latest_run = runs[0] if runs else {}
     order_lifecycles = _build_order_lifecycles(orders)
     order_lifecycle_details = _build_order_lifecycle_details(orders)

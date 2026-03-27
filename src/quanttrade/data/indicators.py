@@ -1,3 +1,9 @@
+"""技术指标预处理。
+
+这里把原始 bar 补齐成策略可直接使用的 bar，
+避免策略层自己再去重复计算 ATR、ADX 和唐奇安通道。
+"""
+
 from __future__ import annotations
 
 from collections import deque
@@ -12,6 +18,7 @@ def enrich_market_bars(
     entry_donchian_n: int,
     exit_donchian_m: int,
 ) -> list[MarketBar]:
+    """为原始行情序列补充 ATR、ADX 和唐奇安通道。"""
     if not bars:
         return []
 
@@ -24,6 +31,7 @@ def enrich_market_bars(
     exit_window: deque[float] = deque(maxlen=exit_donchian_m)
 
     for index, bar in enumerate(bars):
+        # True Range 是 ATR 的基础，它反映这一根 bar 的真实波动幅度。
         tr = max(
             bar.high - bar.low,
             abs(bar.high - previous_close),
@@ -45,6 +53,7 @@ def enrich_market_bars(
         di_total = plus_di + minus_di
         adx = 100.0 * abs(plus_di - minus_di) / di_total if di_total else 0.0
 
+        # 唐奇安通道在窗口还没凑满之前，先退化成当前 bar 的高低点。
         donchian_high = max(entry_window) if len(entry_window) == entry_donchian_n else bar.high
         donchian_low = min(exit_window) if len(exit_window) == exit_donchian_m else bar.low
 

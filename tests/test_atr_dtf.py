@@ -1,3 +1,5 @@
+"""ATR-DTF 策略测试。"""
+
 import unittest
 from datetime import datetime, timezone
 
@@ -8,6 +10,7 @@ from quanttrade.strategies.atr_dtf import AtrDynamicTrendFollowingStrategy
 
 class AtrDtfStrategyTestCase(unittest.TestCase):
     def test_emits_long_entry_when_breakout_and_adx_match(self) -> None:
+        """当价格突破且趋势强度达标时，策略应给出多头入场信号。"""
         strategy = AtrDynamicTrendFollowingStrategy(StrategyConfig(symbol="AAPL"))
         market_bar = MarketBar(
             timestamp=datetime.now(timezone.utc),

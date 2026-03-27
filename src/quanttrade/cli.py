@@ -1,3 +1,12 @@
+"""命令行入口。
+
+这个文件只做两件事：
+1. 定义命令和参数长什么样；
+2. 根据命令把请求转给 `QuantTradeApp`。
+
+也就是说，CLI 只负责“接线”和“打印”，不应该直接塞复杂业务逻辑。
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -7,6 +16,7 @@ from quanttrade.app import QuantTradeApp
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(description="QuantTrade command line interface")
     parser.add_argument(
         "--config",
@@ -14,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to YAML settings file",
     )
 
+    # 每个子命令都对应 QuantTrade 的一个高层能力。
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor", help="Validate config and print effective settings")
     subparsers.add_parser("run-sample", help="Run a single sample strategy step")
@@ -60,6 +71,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """CLI 主入口。
+
+    解析参数后，把不同命令分发给 `QuantTradeApp`，最后统一用 JSON 打印结果。
+    """
     parser = build_parser()
     args = parser.parse_args()
     app = QuantTradeApp(args.config)
@@ -83,6 +98,10 @@ def main() -> None:
         return
 
     if args.command == "backtest":
+        # `backtest` 有三种用法：
+        # 1. 只运行并返回结果；
+        # 2. 导出 JSON 报告；
+        # 3. 直接落库，形成可追踪的历史记录。
         if args.persist:
             payload = app.persist_backtest_run(
                 symbol=args.symbol,

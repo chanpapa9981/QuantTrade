@@ -1,3 +1,5 @@
+"""历史 dashboard HTML 导出测试。"""
+
 import csv
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -8,6 +10,7 @@ from quanttrade.app import QuantTradeApp
 
 class HistoryHtmlTestCase(unittest.TestCase):
     def test_export_history_html_writes_expected_sections(self) -> None:
+        """确认历史页包含生命周期、筛选器、分享态和异常聚焦相关区域。"""
         base_dir = Path("var/test-artifacts/history-html")
         base_dir.mkdir(parents=True, exist_ok=True)
         csv_path = base_dir / "bars.csv"

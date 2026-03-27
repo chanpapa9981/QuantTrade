@@ -1,3 +1,16 @@
+"""回测引擎。
+
+这是项目里最核心的业务编排模块之一。
+它会把：
+1. 行情数据；
+2. 策略决策；
+3. 风控检查；
+4. 模拟执行；
+5. 审计日志；
+6. 指标计算；
+全部串成一次完整的历史回放流程。
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -24,6 +37,8 @@ from quanttrade.strategies.base import Strategy
 
 @dataclass(slots=True)
 class BacktestStepResult:
+    """单步样例回测结果。"""
+
     signal: str
     reason: str
     risk_allowed: bool
@@ -32,6 +47,8 @@ class BacktestStepResult:
 
 
 class BacktestEngine:
+    """负责执行单步回测和完整序列回测。"""
+
     def __init__(self, strategy: Strategy, risk_engine: RiskEngine, execution_engine: SimulatedExecutionEngine) -> None:
         self.strategy = strategy
         self.risk_engine = risk_engine
@@ -43,9 +60,12 @@ class BacktestEngine:
         account_state: AccountState,
         position_state: PositionState,
     ) -> BacktestStepResult:
+        """执行一次单 bar 回测，主要用于样例链路和快速检查。"""
         decision = self.strategy.generate_signal(market_bar, position_state, account_state)
         risk_result = self.risk_engine.validate(account_state, decision, market_bar)
 
+        # 对入场信号来说，只要风控不通过，就不允许继续执行。
+        # 但对退出信号，通常宁可先退出，也不要被风控拦住。
         if not risk_result.allowed and decision.signal != SignalType.LONG_EXIT:
             return BacktestStepResult(
                 signal=decision.signal.value,
@@ -78,6 +98,7 @@ class BacktestEngine:
         bars: list[MarketBar],
         initial_equity: float,
     ) -> BacktestRunResult:
+        """执行一整段历史序列回测。"""
         symbol = self.strategy.config.symbol
         account_state = AccountState(equity=initial_equity, cash=initial_equity)
         position_state = PositionState(symbol=symbol)
@@ -90,6 +111,7 @@ class BacktestEngine:
         drawdown_timeline: list[dict[str, str | float]] = []
         period_returns: list[float] = []
 
+        # 先补齐 ATR、ADX、唐奇安通道等指标，后面策略层可直接读取。
         enriched_bars = enrich_market_bars(
             bars=bars,
             atr_period=self.strategy.config.atr_smooth_period,
@@ -101,6 +123,7 @@ class BacktestEngine:
         for bar in enriched_bars:
             prior_equity = account_state.equity
             if position_state.is_open:
+                # 持仓期间持续抬高止损，模拟趋势策略的动态保护逻辑。
                 position_state.stop_loss = (
                     max(position_state.stop_loss or 0.0, bar.close - self.strategy.config.risk_coefficient_k * bar.atr)
                     if bar.atr > 0
@@ -108,8 +131,10 @@ class BacktestEngine:
                 )
 
             if pending_order:
+                # 只要还有挂单，就优先处理挂单，而不是让策略重新发一张新单。
                 pending_order.bars_open += 1
                 if pending_order.bars_open > self.execution_engine.config.open_order_timeout_bars:
+                    # 超过等待阈值后，主动取消，避免订单无限悬挂。
                     cancel_event = OrderEvent(
                         timestamp=bar.timestamp,
                         order_id=pending_order.order_id,
@@ -140,6 +165,7 @@ class BacktestEngine:
                     continue
 
                 if round(pending_order.requested_price, 4) != round(bar.close, 4):
+                    # 如果市场已经明显变了，就记录一条 replaced 事件，表示订单被重定价。
                     replace_event = OrderEvent(
                         timestamp=bar.timestamp,
                         order_id=pending_order.order_id,
@@ -198,6 +224,7 @@ class BacktestEngine:
 
             decision = self.strategy.generate_signal(bar, position_state, account_state)
             risk_result = self.risk_engine.validate(account_state, decision, bar)
+            # 不论最终是否下单，都先把“这次策略怎么想的”写进审计日志。
             audit_log.append(
                 {
                     "timestamp": bar.timestamp.isoformat(),
@@ -209,6 +236,7 @@ class BacktestEngine:
             )
             if not risk_result.allowed and decision.signal != SignalType.LONG_EXIT:
                 if decision.signal != SignalType.HOLD:
+                    # 被风控拦下的入场信号也要记成订单事件，否则事后很难知道“为什么没下单”。
                     orders.append(
                         {
                             "timestamp": bar.timestamp.isoformat(),
@@ -241,6 +269,7 @@ class BacktestEngine:
                 continue
 
             if decision.signal == SignalType.HOLD:
+                # HOLD 代表这一根 bar 没有新动作，只做账户市值更新。
                 self._mark_to_market(account_state, position_state, bar.close)
                 equity_curve.append(account_state.equity)
                 period_returns.append(self._period_return(prior_equity, account_state.equity))
@@ -248,6 +277,7 @@ class BacktestEngine:
                 continue
 
             order_id = str(uuid4())
+            # 每次真实发单前先写入 created 事件，确保订单生命周期从创建开始可追踪。
             created_event = OrderEvent(
                 timestamp=bar.timestamp,
                 order_id=order_id,
@@ -308,6 +338,7 @@ class BacktestEngine:
             self._append_curves(equity_timeline, drawdown_timeline, equity_curve, bar.timestamp.isoformat(), account_state.equity)
 
         if pending_order and enriched_bars:
+            # 回测结束时如果还有挂单，必须明确取消，不能把状态留在 open。
             final_bar = enriched_bars[-1]
             cancel_event = OrderEvent(
                 timestamp=final_bar.timestamp,
@@ -334,6 +365,7 @@ class BacktestEngine:
             pending_order = None
 
         if position_state.is_open and enriched_bars:
+            # 回测收尾时强制平仓，避免“回测结束但仓位还没结算”导致指标失真。
             final_bar = enriched_bars[-1]
             decision = self.strategy.generate_signal(final_bar, position_state, account_state)
             decision.signal = SignalType.LONG_EXIT
@@ -385,6 +417,7 @@ class BacktestEngine:
                 account_state.equity,
             )
 
+        # 所有订单、成交和净值序列都准备好之后，再统一计算回测指标。
         metrics = self._calculate_metrics(
             initial_equity,
             account_state.equity,
@@ -419,6 +452,11 @@ class BacktestEngine:
         audit_log: list[dict[str, str | float | int]],
         pending_order: PendingOrderState | None,
     ) -> PendingOrderState | None:
+        """把执行层结果吸收到回测上下文中。
+
+        这个方法的作用是把订单事件、成交事件、审计日志和 pending order 状态同步更新，
+        避免主循环里到处重复写同样的收尾逻辑。
+        """
         next_pending = pending_order
         if execution.order_events:
             orders.extend([self._serialize_order_event(event) for event in execution.order_events])
@@ -456,6 +494,7 @@ class BacktestEngine:
 
     @staticmethod
     def _serialize_order_event(event: OrderEvent) -> dict[str, str | float | int]:
+        """把 dataclass 形式的订单事件转成便于 JSON/数据库处理的字典。"""
         return {
             "timestamp": event.timestamp.isoformat(),
             "order_id": event.order_id,
@@ -474,6 +513,7 @@ class BacktestEngine:
 
     @staticmethod
     def _mark_to_market(account_state: AccountState, position_state: PositionState, market_price: float) -> None:
+        """按最新市场价格更新账户权益和未实现盈亏。"""
         market_value = position_state.quantity * market_price
         unrealized = 0.0
         if position_state.is_open:
@@ -492,6 +532,7 @@ class BacktestEngine:
         timestamp: str,
         equity_value: float,
     ) -> None:
+        """往净值曲线和回撤曲线中追加当前时点。"""
         peak = max(equity_curve) if equity_curve else equity_value
         drawdown_pct = (peak - equity_value) / peak * 100 if peak > 0 else 0.0
         equity_timeline.append({"timestamp": timestamp, "equity": round(equity_value, 4)})
@@ -505,6 +546,7 @@ class BacktestEngine:
         period_returns: list[float],
         trades: list[dict[str, str | float | int]],
     ) -> BacktestMetrics:
+        """根据完整回测过程计算绩效指标。"""
         peak = equity_curve[0] if equity_curve else initial_equity
         max_drawdown = 0.0
         underwater_bars = 0
@@ -520,6 +562,7 @@ class BacktestEngine:
                 else:
                     underwater_bars = 0
 
+        # 对当前这套单边做多策略来说，一笔交易是否真正结束，以 SELL 成交为准。
         closing_trades = [trade for trade in trades if trade["side"] == "SELL"]
         completed_trades = len(closing_trades)
         winning_trades = sum(1 for trade in closing_trades if float(trade.get("pnl", 0.0)) > 0)
@@ -548,12 +591,14 @@ class BacktestEngine:
 
     @staticmethod
     def _period_return(prior_equity: float, current_equity: float) -> float:
+        """计算相邻两个时点之间的收益率。"""
         if prior_equity <= 0:
             return 0.0
         return (current_equity - prior_equity) / prior_equity
 
     @staticmethod
     def _sharpe_ratio(period_returns: list[float]) -> float:
+        """计算 Sharpe 比率。"""
         returns = [value for value in period_returns if value is not None]
         if len(returns) < 2:
             return 0.0
@@ -566,6 +611,7 @@ class BacktestEngine:
 
     @staticmethod
     def _sortino_ratio(period_returns: list[float]) -> float:
+        """计算 Sortino 比率，只把下行波动当成风险。"""
         returns = [value for value in period_returns if value is not None]
         if len(returns) < 2:
             return 0.0

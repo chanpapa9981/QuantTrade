@@ -1,3 +1,5 @@
+"""行情导入器。"""
+
 from __future__ import annotations
 
 import csv
@@ -10,6 +12,7 @@ from quanttrade.data.schema import create_schema
 
 
 def _parse_timestamp(value: str) -> datetime:
+    """把 CSV 里的时间字符串转成带时区的 `datetime`。"""
     normalized = value.strip().replace("Z", "+00:00")
     try:
         timestamp = datetime.fromisoformat(normalized)
@@ -26,6 +29,7 @@ def import_bars_from_csv(
     symbol: str,
     timeframe: str = "1d",
 ) -> int:
+    """从 CSV 读取行情，并写入数据库。"""
     create_schema(db_path)
     rows: list[MarketBar] = []
     with Path(csv_path).open("r", encoding="utf-8", newline="") as handle:
@@ -35,6 +39,7 @@ def import_bars_from_csv(
             raise ValueError("CSV must include timestamp, open, high, low, close, volume columns.")
 
         for row in reader:
+            # 先把每一行变成统一的 MarketBar，再交给仓储层批量写库。
             rows.append(
                 MarketBar(
                     timestamp=_parse_timestamp(row["timestamp"]),

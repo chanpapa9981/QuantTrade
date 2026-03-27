@@ -1,11 +1,15 @@
+"""数据库表结构定义。"""
+
 from __future__ import annotations
 
 from quanttrade.data.storage import connect_database
 
 
 def create_schema(db_path: str) -> None:
+    """创建项目所需的数据表，并兼容旧库字段升级。"""
     connection = connect_database(db_path)
     try:
+        # 这里集中创建项目当前阶段需要的所有核心表。
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS bars (
@@ -94,6 +98,7 @@ def create_schema(db_path: str) -> None:
             ON backtest_executions(symbol, timeframe, status, started_at);
             """
         )
+        # 历史版本数据库可能没有这些字段，所以这里用增量迁移方式自动补齐。
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS order_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS filled_quantity INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS remaining_quantity INTEGER DEFAULT 0;")

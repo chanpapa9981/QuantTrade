@@ -1,1 +1,1 @@
-"""Dashboard data builders."""
+"""Dashboard 模块包。"""

@@ -1,3 +1,16 @@
+"""模拟执行引擎。
+
+这个模块负责回答一个最现实的问题：
+“策略说要买/卖，但市场和账户条件真的允许这样成交吗？”
+
+它会处理：
+1. 滑点；
+2. 手续费；
+3. 单根 bar 的流动性容量；
+4. 部分成交；
+5. 订单保持 open 等待下一根 bar。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,6 +21,8 @@ from quanttrade.core.types import AccountState, FillEvent, OrderEvent, OrderStat
 
 @dataclass(slots=True)
 class ExecutionResult:
+    """执行层返回结果。"""
+
     accepted: bool
     reason: str
     account_state: AccountState
@@ -17,16 +32,20 @@ class ExecutionResult:
 
 
 class SimulatedExecutionEngine:
+    """把策略决策变成模拟成交结果。"""
+
     def __init__(self, config: ExecutionConfig) -> None:
         self.config = config
 
     def _apply_slippage(self, market_price: float, side: str) -> float:
+        """按照买卖方向对市场价施加滑点。"""
         slippage_multiplier = self.config.simulated_slippage_bps / 10_000
         if side == "BUY":
             return round(market_price * (1 + slippage_multiplier), 4)
         return round(market_price * (1 - slippage_multiplier), 4)
 
     def _commission(self, quantity: int) -> float:
+        """计算这笔订单的手续费。"""
         return round(
             max(
                 self.config.min_commission,
@@ -36,6 +55,7 @@ class SimulatedExecutionEngine:
         )
 
     def _liquidity_capacity(self, market_volume: float) -> int:
+        """估算单根 bar 最多允许成交多少股。"""
         return max(int(market_volume * self.config.max_fill_ratio_per_bar), 0)
 
     def execute(
@@ -51,7 +71,9 @@ class SimulatedExecutionEngine:
         allow_existing_position: bool = False,
         force_full_fill: bool = False,
     ) -> ExecutionResult:
+        """执行一笔策略决策，返回账户、持仓和订单/成交事件的变化结果。"""
         if decision.signal == SignalType.LONG_ENTRY:
+            # 正常情况下，不允许在已有多头持仓时再次重复开同向仓位。
             if position_state.is_open and not allow_existing_position:
                 return ExecutionResult(
                     False,
@@ -93,6 +115,7 @@ class SimulatedExecutionEngine:
                         )
                     ],
                 )
+            # 真正能成交多少，要同时受“想买多少”“流动性允许多少”“现金买得起多少”三者约束。
             liquidity_quantity = decision.quantity if force_full_fill else self._liquidity_capacity(market_volume)
             affordable_quantity = max(int((account_state.cash - self.config.min_commission) / fill_price), 0)
             executable_quantity = min(decision.quantity, liquidity_quantity, affordable_quantity)
@@ -117,6 +140,7 @@ class SimulatedExecutionEngine:
                     ],
                 )
             if executable_quantity <= 0:
+                # 如果当前 bar 没有可成交容量，就保留 open 状态，让回测器下一根 bar 再尝试。
                 return ExecutionResult(
                     True,
                     "order remains open awaiting liquidity",
@@ -143,6 +167,7 @@ class SimulatedExecutionEngine:
             total_cost = gross_cost + commission
             current_quantity = position_state.quantity
             next_quantity = current_quantity + executable_quantity
+            # 如果是补仓，需要重新计算持仓均价。
             blended_entry_price = fill_price
             if current_quantity > 0 and next_quantity > 0:
                 blended_entry_price = round(
@@ -206,6 +231,7 @@ class SimulatedExecutionEngine:
             )
 
         if decision.signal == SignalType.LONG_EXIT:
+            # 没有持仓却要求卖出，属于无效动作，直接拒绝。
             if not position_state.is_open:
                 return ExecutionResult(
                     False,
@@ -227,6 +253,7 @@ class SimulatedExecutionEngine:
                     ],
                 )
             fill_price = self._apply_slippage(market_price, "SELL")
+            # 卖出也会受 bar 容量限制，所以可能只卖出一部分。
             liquidity_quantity = position_state.quantity if force_full_fill else self._liquidity_capacity(market_volume)
             executable_quantity = min(position_state.quantity, liquidity_quantity)
             if executable_quantity <= 0:
@@ -315,4 +342,5 @@ class SimulatedExecutionEngine:
                 order_events=order_events,
             )
 
+        # HOLD 信号最终什么都不做，但仍返回一个标准结构，方便调用方统一处理。
         return ExecutionResult(True, "no-op", account_state, position_state, fill_events=[], order_events=[])

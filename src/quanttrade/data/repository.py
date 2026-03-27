@@ -1,3 +1,8 @@
+"""数据仓储层。
+
+仓储层的职责不是“做业务判断”，而是“把数据正确地存进去、取出来、整理好”。
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -8,10 +13,13 @@ from quanttrade.data.storage import connect_database
 
 
 class BarRepository:
+    """负责行情 bars 的读写。"""
+
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
 
     def insert_bars(self, symbol: str, timeframe: str, bars: list[MarketBar]) -> int:
+        """批量写入行情 bar。"""
         connection = connect_database(self.db_path)
         try:
             payload = [
@@ -40,6 +48,7 @@ class BarRepository:
             connection.close()
 
     def fetch_bars(self, symbol: str, timeframe: str = "1d") -> list[MarketBar]:
+        """按标的和周期读取历史 bar。"""
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
@@ -71,10 +80,13 @@ class BarRepository:
 
 
 class BacktestRunRepository:
+    """负责回测运行、订单、审计日志、快照等持久化读写。"""
+
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
 
     def create_execution(self, symbol: str, timeframe: str, initial_equity: float) -> str:
+        """创建一条新的回测执行记录。"""
         connection = connect_database(self.db_path)
         execution_id = str(uuid4())
         started_at = datetime.now(UTC).isoformat()
@@ -102,6 +114,7 @@ class BacktestRunRepository:
             connection.close()
 
     def mark_execution_completed(self, execution_id: str, run_id: str) -> None:
+        """把执行记录标记为完成，并挂上生成的 run_id。"""
         connection = connect_database(self.db_path)
         finished_at = datetime.now(UTC).isoformat()
         try:
@@ -117,6 +130,7 @@ class BacktestRunRepository:
             connection.close()
 
     def mark_execution_failed(self, execution_id: str, error_message: str, status: str = "failed") -> None:
+        """把执行记录标记为失败或其它异常结束状态。"""
         connection = connect_database(self.db_path)
         finished_at = datetime.now(UTC).isoformat()
         try:
@@ -132,6 +146,7 @@ class BacktestRunRepository:
             connection.close()
 
     def recover_stale_executions(self, symbol: str, timeframe: str) -> int:
+        """把异常中断后残留的 running 记录修正为 abandoned。"""
         connection = connect_database(self.db_path)
         finished_at = datetime.now(UTC).isoformat()
         try:
@@ -168,6 +183,7 @@ class BacktestRunRepository:
             connection.close()
 
     def save_run(self, symbol: str, timeframe: str, payload: dict[str, object]) -> str:
+        """把一次完整回测的结果写入数据库。"""
         connection = connect_database(self.db_path)
         run_id = str(uuid4())
         metrics = payload["metrics"]
@@ -202,6 +218,7 @@ class BacktestRunRepository:
                 ),
             )
             if orders:
+                # 订单事件保留的是过程细节，方便后续做生命周期分析。
                 connection.executemany(
                     """
                     INSERT INTO order_events (
@@ -230,6 +247,7 @@ class BacktestRunRepository:
                     ],
                 )
             if audit_log:
+                # 审计日志保留“系统为什么这样做”的解释信息。
                 connection.executemany(
                     """
                     INSERT INTO audit_events (
@@ -248,6 +266,7 @@ class BacktestRunRepository:
                         for event in audit_log
                     ],
                 )
+            # 账户快照记录最终现金、权益和盈亏，方便历史页回放运行结果。
             account = payload["account"]
             connection.execute(
                 """
@@ -270,6 +289,7 @@ class BacktestRunRepository:
             connection.close()
 
     def fetch_recent_runs(self, limit: int = 10) -> list[dict[str, object]]:
+        """查询最近几次回测运行。"""
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
@@ -306,6 +326,7 @@ class BacktestRunRepository:
         ]
 
     def fetch_recent_executions(self, limit: int = 10) -> list[dict[str, object]]:
+        """查询最近几次执行尝试，包括失败与中断。"""
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
@@ -340,6 +361,7 @@ class BacktestRunRepository:
         ]
 
     def fetch_run_detail(self, run_id: str) -> dict[str, object] | None:
+        """查询某次回测的完整详情。"""
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
@@ -390,6 +412,7 @@ class BacktestRunRepository:
         finally:
             connection.close()
 
+        # 先把原始订单事件标准化成字典，再往上构建生命周期摘要。
         orders = [
             {
                 "order_id": row[0],
@@ -459,6 +482,7 @@ class BacktestRunRepository:
         }
 
     def fetch_order_detail(self, order_id: str) -> dict[str, object] | None:
+        """查询某一笔订单的完整事件流和所属运行信息。"""
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
@@ -526,6 +550,7 @@ class BacktestRunRepository:
         }
 
     def fetch_recent_order_events(self, limit: int = 20) -> list[dict[str, object]]:
+        """查询最近的订单事件。"""
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
@@ -561,6 +586,7 @@ class BacktestRunRepository:
         ]
 
     def fetch_recent_audit_events(self, limit: int = 20) -> list[dict[str, object]]:
+        """查询最近的审计事件。"""
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
@@ -590,6 +616,7 @@ class BacktestRunRepository:
         ]
 
     def fetch_history_bundle(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, list[dict[str, object]]]:
+        """一次性取回历史页面需要的 runs / orders / audit 三组数据。"""
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
@@ -686,6 +713,7 @@ class BacktestRunRepository:
 
     @staticmethod
     def _build_order_lifecycles(order_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        """把散落的订单事件按 `order_id` 归并成生命周期摘要。"""
         grouped: dict[str, list[dict[str, object]]] = {}
         for row in order_rows:
             order_id = str(row.get("order_id", ""))
@@ -693,6 +721,8 @@ class BacktestRunRepository:
 
         lifecycles: list[dict[str, object]] = []
         for order_id, events in grouped.items():
+            # status_path 用来回答最关键的问题：
+            # “这张单从创建到结束，完整经历了哪些状态？”
             statuses = [str(event.get("status", "")) for event in events]
             first_event = events[0]
             last_event = events[-1]

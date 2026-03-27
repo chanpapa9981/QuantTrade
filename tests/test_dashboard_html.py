@@ -1,3 +1,5 @@
+"""静态 dashboard HTML 导出测试。"""
+
 import csv
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -8,6 +10,7 @@ from quanttrade.app import QuantTradeApp
 
 class DashboardHtmlTestCase(unittest.TestCase):
     def test_export_dashboard_html_writes_expected_sections(self) -> None:
+        """确认导出的 HTML 页面包含主要面板和表格区域。"""
         base_dir = Path("var/test-artifacts/dashboard-html")
         base_dir.mkdir(parents=True, exist_ok=True)
         csv_path = base_dir / "bars.csv"

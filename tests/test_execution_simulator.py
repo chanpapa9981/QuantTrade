@@ -1,3 +1,5 @@
+"""模拟执行器测试。"""
+
 import unittest
 from datetime import datetime, timezone
 
@@ -8,6 +10,7 @@ from quanttrade.execution.simulator import SimulatedExecutionEngine
 
 class SimulatedExecutionEngineTestCase(unittest.TestCase):
     def setUp(self) -> None:
+        """准备一套固定执行配置，避免不同测试互相影响。"""
         self.engine = SimulatedExecutionEngine(
             ExecutionConfig(
                 commission_per_order=1.0,
@@ -20,6 +23,7 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.timestamp = datetime.now(timezone.utc)
 
     def test_partial_entry_generates_partial_fill_and_cancellation(self) -> None:
+        """当流动性不足时，入场订单应只成交一部分，并保留剩余数量。"""
         result = self.engine.execute(
             timestamp=self.timestamp,
             order_id="order-entry-1",
@@ -45,6 +49,7 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(result.order_events[0].remaining_quantity, 15)
 
     def test_duplicate_entry_is_rejected_when_position_already_open(self) -> None:
+        """已有持仓时再次发同向入场单，应被执行层拒绝。"""
         result = self.engine.execute(
             timestamp=self.timestamp,
             order_id="order-entry-2",
@@ -67,6 +72,7 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertIn("duplicate", result.order_events[0].reason)
 
     def test_partial_exit_reduces_position_and_cancels_remainder(self) -> None:
+        """退出时如果流动性不足，应先部分卖出并保留剩余仓位。"""
         result = self.engine.execute(
             timestamp=self.timestamp,
             order_id="order-exit-1",
@@ -90,6 +96,7 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(result.order_events[0].remaining_quantity, 7)
 
     def test_zero_liquidity_keeps_order_open(self) -> None:
+        """完全没有流动性时，订单应保持 open，而不是伪造成交。"""
         result = self.engine.execute(
             timestamp=self.timestamp,
             order_id="order-entry-open",

@@ -1,4 +1,4 @@
-"""QuantTrade package."""
+"""QuantTrade 项目顶层包。"""
 
 __all__ = ["__version__"]
 

@@ -1,3 +1,9 @@
+"""静态 HTML 渲染器。
+
+这个文件负责把 Python 侧准备好的 payload 直接拼成完整 HTML 页面。
+其中页面内的 JS 只做轻量交互，不依赖后端服务。
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,6 +11,7 @@ from pathlib import Path
 
 
 def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
+    """渲染单次回测 dashboard 页面。"""
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data_json = json.dumps(payload, ensure_ascii=False)
@@ -345,10 +352,12 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
   <script>
     const payload = {data_json};
 
+    // 统一数字格式化，避免各个渲染函数各自处理小数位。
     function fmt(value) {{
       return typeof value === "number" ? value.toLocaleString(undefined, {{ maximumFractionDigits: 4 }}) : value;
     }}
 
+    // 顶部卡片只负责回答“这次回测结果大概怎么样”。
     function renderCards() {{
       const target = document.getElementById("summary-cards");
       target.innerHTML = payload.summary_cards.map(card => `
@@ -359,6 +368,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
 
+    // 统计区域用于展示账户、绩效、订单健康度等成组信息。
     function renderStats(id, stats) {{
       const target = document.getElementById(id);
       target.innerHTML = Object.entries(stats).map(([key, value]) => `
@@ -369,6 +379,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
 
+    // 近期成交表帮助我们快速确认最近有哪些真实 fill。
     function renderTrades() {{
       const target = document.getElementById("recent-trades");
       target.innerHTML = payload.recent_trades.map(trade => `
@@ -384,6 +395,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
 
+    // 近期订单表会保留更多执行细节，例如已成交数量和剩余数量。
     function renderOrders() {{
       const target = document.getElementById("recent-orders");
       target.innerHTML = payload.recent_orders.map(order => `
@@ -401,6 +413,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
 
+    // 审计日志表主要回答“系统为什么会这样决定”。
     function renderAuditLog() {{
       const target = document.getElementById("audit-log");
       target.innerHTML = payload.audit_timeline.map(event => `
@@ -413,6 +426,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
 
+    // 把时间序列数据转成 SVG 折线图坐标。
     function polylinePoints(items, accessor, width, height, invert = false) {{
       if (!items.length) return "";
       const values = items.map(accessor);
@@ -428,6 +442,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       }}).join(" ");
     }}
 
+    // 用统一方式渲染净值和回撤两种曲线。
     function renderChart(id, items, accessor, stroke, fill) {{
       const svg = document.getElementById(id);
       const width = 800;
@@ -466,6 +481,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
 
 
 def render_history_html(payload: dict[str, object], output_path: str) -> str:
+    """渲染历史运行 dashboard 页面。"""
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data_json = json.dumps(payload, ensure_ascii=False)
@@ -806,6 +822,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
   </main>
   <script>
     const payload = {data_json};
+
+    // 历史页的设计目标不是花哨，而是让复盘和排错尽量少跳转。
     function fmt(value) {{
       return typeof value === "number" ? value.toLocaleString(undefined, {{ maximumFractionDigits: 4 }}) : value;
     }}
@@ -821,6 +839,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       return payload.runs_table.map(run => run.run_id);
     }}
     function hydrateRunFilter() {{
+      // run 下拉框来自真实运行记录，而不是写死在页面里。
       const select = document.getElementById("run-filter");
       const options = ['<option value="all">All runs</option>'].concat(
         payload.runs_table.map(run => `<option value="${{run.run_id}}">${{run.run_id}}</option>`)
@@ -831,6 +850,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       return payload.order_lifecycles.find(order => order.order_id === orderId);
     }}
     function readHashState() {{
+      // 所有筛选状态都从 URL hash 中恢复，这样页面可以被分享和复现。
       const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
       const runId = params.get("run") || "all";
       const lifecycleFilter = params.get("filter") || "all";
@@ -847,6 +867,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     }}
     const state = readHashState();
     function writeHashState() {{
+      // 每次筛选变化后都同步回地址栏，保证“当前所见就是当前链接”。
       const params = new URLSearchParams();
       if (state.runId !== "all") params.set("run", state.runId);
       if (state.lifecycleFilter !== "all") params.set("filter", state.lifecycleFilter);
@@ -870,6 +891,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       return filteredLifecycles().filter(order => state.focus === "all" || isAnomaly(order)).length;
     }}
     function renderContext() {{
+      // 这一行是给人看的“当前上下文摘要”，方便确认自己到底筛到了哪里。
       const bits = [];
       bits.push(state.runId === "all" ? "Run: all" : `Run: ${{state.runId}}`);
       bits.push(`Status: ${{state.lifecycleFilter}}`);
@@ -880,6 +902,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("selected-context").textContent = bits.join(" | ");
     }}
     function renderCards() {{
+      // 顶部卡片先给总览，再决定是否深入看表格明细。
       const summary = payload.history_summary;
       const cards = [
         {{ label: "Total Runs", value: summary.total_runs }},
@@ -899,6 +922,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
     function renderRuns() {{
+      // Recent Runs 表让我们先确定“要看哪一次运行”。
       document.getElementById("runs-table").innerHTML = payload.runs_table.map(run => `
         <tr class="${{state.runId === run.run_id ? "row-active" : ""}}">
           <td><button class="link-button" data-run-id="${{run.run_id}}">${{run.run_id}}</button></td>
@@ -918,6 +942,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       }});
     }}
     function renderOrders() {{
+      // 这里展示的是原始订单事件，适合看最近实际发生的执行动作。
       const rows = payload.recent_orders.filter(order => {{
         if (state.runId !== "all" && order.run_id !== state.runId) return false;
         if (state.side !== "all" && order.side !== state.side) return false;
@@ -948,6 +973,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       }});
     }}
     function filteredLifecycles() {{
+      // 先按 run / side 缩小范围，再按生命周期状态继续过滤。
       const scoped = payload.order_lifecycles.filter(order => {{
         if (state.runId !== "all" && order.run_id !== state.runId) return false;
         if (state.side !== "all" && order.side !== state.side) return false;
@@ -960,6 +986,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       return scoped.filter(order => order.final_status === state.lifecycleFilter);
     }}
     function renderLifecycles() {{
+      // 生命周期表更强调“一笔订单完整经历了什么”，而不是孤立事件。
       const rows = filteredLifecycles().filter(order => state.focus === "all" || isAnomaly(order));
       if (!rows.some(order => order.order_id === state.orderId)) {{
         state.orderId = rows[0]?.order_id ?? "";
@@ -990,6 +1017,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       renderLifecycleDetail();
     }}
     function renderLifecycleDetail() {{
+      // 明细表展示的是被选中订单的原始事件流，用来做最终排错。
       const events = payload.order_lifecycle_details[state.orderId] || [];
       const lifecycle = findLifecycle(state.orderId);
       document.getElementById("lifecycle-detail-meta").textContent = lifecycle
@@ -1008,6 +1036,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
     function renderAudit() {{
+      // 审计日志和订单表联动 run 过滤，但不会跟 side/focus 强绑定，
+      // 因为审计日志描述的是整个系统行为，而不是单一订单切片。
       const rows = payload.recent_audit_events.filter(event => state.runId === "all" || event.run_id === state.runId);
       document.getElementById("audit-table").innerHTML = rows.map(event => `
         <tr>
@@ -1019,6 +1049,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
     async function copyCurrentLink() {{
+      // 优先用浏览器剪贴板 API；如果环境不支持，就退化成 prompt。
       const button = document.getElementById("copy-link");
       const originalLabel = button.textContent;
       try {{
@@ -1037,6 +1068,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       }}, 1400);
     }}
     function renderAll() {{
+      // 所有页面更新都走同一个总入口，避免多个函数各自改一半状态。
       syncControlsToState();
       renderContext();
       renderRuns();

@@ -1,3 +1,5 @@
+"""Dashboard 数据快照测试。"""
+
 import csv
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -8,6 +10,7 @@ from quanttrade.app import QuantTradeApp
 
 class DashboardSnapshotTestCase(unittest.TestCase):
     def test_dashboard_snapshot_contains_summary_and_charts(self) -> None:
+        """确认 dashboard 数据载荷包含前端展示所需的关键结构。"""
         base_dir = Path("var/test-artifacts/dashboard")
         base_dir.mkdir(parents=True, exist_ok=True)
         csv_path = base_dir / "bars.csv"

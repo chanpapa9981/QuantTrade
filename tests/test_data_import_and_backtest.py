@@ -1,3 +1,5 @@
+"""数据导入与回测集成测试。"""
+
 import csv
 import json
 import unittest
@@ -18,6 +20,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         max_fill_ratio_per_bar: float = 0.05,
         open_order_timeout_bars: int = 2,
     ) -> None:
+        """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
             "\n".join(
                 [
@@ -40,6 +43,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         )
 
     def test_import_csv_and_run_backtest(self) -> None:
+        """验证导入、回测、导出、持久化、历史查询整条链路都能跑通。"""
         base_dir = Path("var/test-artifacts/integration")
         base_dir.mkdir(parents=True, exist_ok=True)
         csv_path = base_dir / "bars.csv"
@@ -132,6 +136,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("history_summary", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
+        """验证中断后残留的 running execution 能被自动恢复标记。"""
         base_dir = Path("var/test-artifacts/execution-recovery")
         base_dir.mkdir(parents=True, exist_ok=True)
         csv_path = base_dir / "bars.csv"
@@ -176,6 +181,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_executions["executions"][1]["status"], "abandoned")
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
+        """验证同标的同周期重复执行时，会被运行锁直接拦住。"""
         base_dir = Path("var/test-artifacts/execution-lock")
         base_dir.mkdir(parents=True, exist_ok=True)
         csv_path = base_dir / "bars.csv"
@@ -212,6 +218,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                 app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
 
     def test_backtest_keeps_orders_open_across_bars_and_times_out(self) -> None:
+        """验证挂单可以跨 bar 存活，并在超时后自动取消。"""
         base_dir = Path("var/test-artifacts/open-order-timeout")
         base_dir.mkdir(parents=True, exist_ok=True)
         csv_path = base_dir / "bars.csv"
