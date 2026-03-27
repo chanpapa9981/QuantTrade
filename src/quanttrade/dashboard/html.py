@@ -624,6 +624,9 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     .row-active {{
       background: rgba(98, 192, 255, 0.10);
     }}
+    .row-anomaly {{
+      box-shadow: inset 3px 0 0 rgba(255, 191, 105, 0.9);
+    }}
     .table-wrap {{
       overflow-x: auto;
     }}
@@ -706,6 +709,11 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <option value="all">All sides</option>
               <option value="BUY">Buy</option>
               <option value="SELL">Sell</option>
+            </select>
+            <label for="focus-filter">Focus</label>
+            <select id="focus-filter">
+              <option value="all">All orders</option>
+              <option value="anomalies">Anomalies</option>
             </select>
             <div class="toolbar-actions">
               <button id="clear-context" class="ghost-button" type="button">Clear Context</button>
@@ -804,6 +812,11 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     function lifecycleCountForRun(runId) {{
       return payload.order_lifecycles.filter(order => order.run_id === runId).length;
     }}
+    function isAnomaly(order) {{
+      if (!order) return false;
+      if (order.final_status !== "filled") return true;
+      return order.status_path.includes("replaced");
+    }}
     function availableRunIds() {{
       return payload.runs_table.map(run => run.run_id);
     }}
@@ -822,11 +835,13 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const runId = params.get("run") || "all";
       const lifecycleFilter = params.get("filter") || "all";
       const side = params.get("side") || "all";
+      const focus = params.get("focus") || "all";
       const orderId = params.get("order") || "";
       return {{
         runId: availableRunIds().includes(runId) ? runId : "all",
         lifecycleFilter: ["all", "filled", "cancelled", "open", "repriced"].includes(lifecycleFilter) ? lifecycleFilter : "all",
         side: ["all", "BUY", "SELL"].includes(side) ? side : "all",
+        focus: ["all", "anomalies"].includes(focus) ? focus : "all",
         orderId,
       }};
     }}
@@ -836,6 +851,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       if (state.runId !== "all") params.set("run", state.runId);
       if (state.lifecycleFilter !== "all") params.set("filter", state.lifecycleFilter);
       if (state.side !== "all") params.set("side", state.side);
+      if (state.focus !== "all") params.set("focus", state.focus);
       if (state.orderId) params.set("order", state.orderId);
       const hash = params.toString() ? `#${{params.toString()}}` : "";
       const target = `${{window.location.pathname}}${{window.location.search}}${{hash}}`;
@@ -848,15 +864,17 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("run-filter").value = state.runId;
       document.getElementById("lifecycle-filter").value = state.lifecycleFilter;
       document.getElementById("side-filter").value = state.side;
+      document.getElementById("focus-filter").value = state.focus;
     }}
     function filteredLifecycleCount() {{
-      return filteredLifecycles().length;
+      return filteredLifecycles().filter(order => state.focus === "all" || isAnomaly(order)).length;
     }}
     function renderContext() {{
       const bits = [];
       bits.push(state.runId === "all" ? "Run: all" : `Run: ${{state.runId}}`);
       bits.push(`Status: ${{state.lifecycleFilter}}`);
       bits.push(`Side: ${{state.side === "all" ? "all" : state.side}}`);
+      bits.push(`Focus: ${{state.focus}}`);
       bits.push(`Matches: ${{filteredLifecycleCount()}}`);
       bits.push(state.orderId ? `Order: ${{state.orderId}}` : "Order: none selected");
       document.getElementById("selected-context").textContent = bits.join(" | ");
@@ -942,12 +960,12 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       return scoped.filter(order => order.final_status === state.lifecycleFilter);
     }}
     function renderLifecycles() {{
-      const rows = filteredLifecycles();
+      const rows = filteredLifecycles().filter(order => state.focus === "all" || isAnomaly(order));
       if (!rows.some(order => order.order_id === state.orderId)) {{
         state.orderId = rows[0]?.order_id ?? "";
       }}
       document.getElementById("lifecycle-table").innerHTML = rows.map(order => `
-        <tr class="${{state.orderId === order.order_id ? "row-active" : ""}}">
+        <tr class="${{[state.orderId === order.order_id ? "row-active" : "", isAnomaly(order) ? "row-anomaly" : ""].filter(Boolean).join(" ")}}">
           <td><button class="link-button" data-order-id="${{order.order_id}}">${{order.order_id}}</button></td>
           <td><button class="link-button" data-run-id="${{order.run_id}}">${{order.run_id}}</button></td>
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
@@ -1042,10 +1060,15 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.side = event.target.value || "all";
       renderAll();
     }});
+    document.getElementById("focus-filter").addEventListener("change", event => {{
+      state.focus = event.target.value || "all";
+      renderAll();
+    }});
     document.getElementById("clear-context").addEventListener("click", () => {{
       state.runId = "all";
       state.lifecycleFilter = "all";
       state.side = "all";
+      state.focus = "all";
       state.orderId = "";
       renderAll();
     }});
@@ -1055,6 +1078,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.runId = next.runId;
       state.lifecycleFilter = next.lifecycleFilter;
       state.side = next.side;
+      state.focus = next.focus;
       state.orderId = next.orderId;
       renderAll();
     }});
