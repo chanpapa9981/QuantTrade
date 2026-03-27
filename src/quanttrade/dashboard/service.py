@@ -89,15 +89,21 @@ def build_history_payload(
     audit_events: list[dict[str, object]],
 ) -> dict[str, object]:
     latest_run = runs[0] if runs else {}
+    order_lifecycles = _build_order_lifecycles(orders)
     return {
         "history_summary": {
             "total_runs": len(runs),
             "latest_symbol": latest_run.get("symbol", ""),
             "latest_return_pct": latest_run.get("total_return_pct", 0.0),
             "latest_sharpe_ratio": latest_run.get("sharpe_ratio", 0.0),
+            "total_lifecycles": len(order_lifecycles),
+            "filled_lifecycles": len([item for item in order_lifecycles if item.get("final_status") == "filled"]),
+            "cancelled_lifecycles": len([item for item in order_lifecycles if item.get("final_status") == "cancelled"]),
+            "open_lifecycles": len([item for item in order_lifecycles if item.get("final_status") == "open"]),
+            "repriced_lifecycles": len([item for item in order_lifecycles if "replaced" in str(item.get("status_path", ""))]),
         },
         "runs_table": runs,
-        "order_lifecycles": _build_order_lifecycles(orders),
+        "order_lifecycles": order_lifecycles,
         "recent_orders": orders,
         "recent_audit_events": audit_events,
     }

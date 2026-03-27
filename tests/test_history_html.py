@@ -63,6 +63,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertTrue(output_path.exists())
         html = output_path.read_text(encoding="utf-8")
         self.assertIn("Run History Dashboard", html)
+        self.assertIn("Lifecycle Filled", html)
         self.assertIn("Recent Runs", html)
         self.assertIn("Order Lifecycles", html)
         self.assertIn("Recent Orders", html)

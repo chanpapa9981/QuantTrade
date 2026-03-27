@@ -701,6 +701,10 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Latest Symbol", value: summary.latest_symbol }},
         {{ label: "Latest Return %", value: summary.latest_return_pct }},
         {{ label: "Latest Sharpe", value: summary.latest_sharpe_ratio }},
+        {{ label: "Order Lifecycles", value: summary.total_lifecycles }},
+        {{ label: "Lifecycle Filled", value: summary.filled_lifecycles }},
+        {{ label: "Lifecycle Cancelled", value: summary.cancelled_lifecycles }},
+        {{ label: "Lifecycle Repriced", value: summary.repriced_lifecycles }},
       ];
       document.getElementById("summary-cards").innerHTML = cards.map(card => `
         <article class="card">
