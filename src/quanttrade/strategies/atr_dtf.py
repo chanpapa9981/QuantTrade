@@ -25,7 +25,10 @@ class AtrDynamicTrendFollowingStrategy(Strategy):
                     reason="price breaks Donchian high and ADX passes trend filter",
                     stop_loss=stop_loss,
                     quantity=quantity,
-                    metadata={"symbol": self.config.symbol},
+                    metadata={
+                        "symbol": self.config.symbol,
+                        "estimated_slippage_pct": 0.0005,
+                    },
                 )
             return StrategyDecision(signal=SignalType.HOLD, reason="entry conditions not met")
 

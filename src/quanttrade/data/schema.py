@@ -22,6 +22,47 @@ def create_schema(db_path: str) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_bars_symbol_timeframe_timestamp
             ON bars(symbol, timeframe, timestamp);
+
+            CREATE TABLE IF NOT EXISTS backtest_runs (
+                run_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                bars_processed INTEGER NOT NULL,
+                ending_equity REAL NOT NULL,
+                total_return_pct REAL NOT NULL,
+                max_drawdown_pct REAL NOT NULL,
+                sharpe_ratio REAL NOT NULL,
+                sortino_ratio REAL NOT NULL,
+                total_trades INTEGER NOT NULL,
+                winning_trades INTEGER NOT NULL,
+                losing_trades INTEGER NOT NULL,
+                avg_trade_pnl REAL NOT NULL,
+                profit_factor REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS order_events (
+                run_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                side TEXT NOT NULL,
+                status TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                requested_price REAL NOT NULL,
+                fill_price REAL NOT NULL,
+                commission REAL NOT NULL,
+                gross_value REAL NOT NULL,
+                net_value REAL NOT NULL,
+                reason TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_events (
+                run_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                event TEXT NOT NULL,
+                signal TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                risk_allowed INTEGER NOT NULL
+            );
             """
         )
     finally:

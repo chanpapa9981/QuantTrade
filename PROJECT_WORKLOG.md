@@ -69,7 +69,14 @@
 | W-014 | 回测层 | 输出绩效指标 | 计算收益、回撤、Sharpe 等 | 已完成 |
 | W-015 | 风控层 | 完善标的级风控 | 滑点、流动性、权重保护 | 未开始 |
 | W-016 | 执行层 | 完善订单模型 | 挂单、撤单、成交、对账 | 进行中 |
+| W-021 | 风控层 | 增加真实交易成本与流动性约束 | 手续费、滑点、流动性过滤 | 已完成 |
+| W-022 | 回测层 | 丰富风险收益指标 | Sharpe、Sortino、最长水下期等 | 已完成 |
 | W-017 | UI | 建立 Dashboard 原型 | 参数台、日志台、净值图 | 未开始 |
+| W-023 | Dashboard | 准备 dashboard 数据接口 | 摘要卡片、曲线数据、近期交易 | 已完成 |
+| W-024 | Dashboard | 导出静态 dashboard 页面 | 生成可直接查看的 HTML 报告 | 已完成 |
+| W-025 | 执行层 | 增加订单状态记录与审计事件流 | 为实盘前状态机和审计提供基础 | 已完成 |
+| W-026 | 数据层 | 持久化回测运行结果 | 落库存储回测、订单、审计事件 | 已完成 |
+| W-027 | 数据层 | 增加运行历史查询接口 | 查询 run detail、order events、audit events | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -131,6 +138,14 @@
 | 2026-03-27 | 完整历史回测 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml backtest --symbol AAPL --timeframe 1d --initial-equity 100000` | 通过 |
 | 2026-03-27 | 回测结果导出 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml backtest --symbol AAPL --timeframe 1d --initial-equity 100000 --output var/reports/aapl-backtest.json` | 通过 |
 | 2026-03-27 | 账户状态闭环增强 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
+| 2026-03-27 | 交易成本与绩效增强 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
+| 2026-03-27 | 风险收益指标增强 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml backtest --symbol AAPL --timeframe 1d --initial-equity 100000` | 通过 |
+| 2026-03-27 | Dashboard 数据接口 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml dashboard-data --symbol AAPL` | 待验证 |
+| 2026-03-27 | Dashboard HTML 导出 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml dashboard-html --symbol AAPL` | 待验证 |
+| 2026-03-27 | 订单与审计增强 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 待验证 |
+| 2026-03-27 | 回测结果持久化 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml backtest --symbol AAPL --timeframe 1d --initial-equity 100000 --persist` | 通过 |
+| 2026-03-27 | 回测运行记录查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml runs --limit 5` | 通过 |
+| 2026-03-27 | 历史摘要查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history --runs-limit 5 --events-limit 5` | 通过 |
 
 ---
 
@@ -167,8 +182,11 @@
 | P0 | 完善订单与账户状态模型 | 为模拟执行闭环做准备 |
 | P0 | 完善订单与账户状态模型 | 为模拟执行闭环做准备 |
 | P0 | 增加回测结果导出 | 为 dashboard 提供输入文件 |
-| P1 | 提升绩效指标丰富度 | 增加 Sharpe、Profit Factor 等 |
-| P1 | 准备 dashboard 数据接口 | 为前端展示做后端整理 |
+| P0 | 开始更完整的 dashboard 页面骨架 | 增加参数面板、日志区和更细的图表布局 |
+| P0 | 继续完善订单状态机 | 引入撤单、部分成交、重复下单保护 |
+| P0 | 开始 dashboard 历史页 | 使用已落库的 run/order/audit 数据 |
+| P1 | 提升绩效指标丰富度 | 增加更多风险稳定性指标 |
+| P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
 
 ---
 
@@ -208,6 +226,83 @@
 | 结果 | 回测结果已包含账户状态，执行层与回测层职责更清晰 |
 | 未完成 | 订单状态机、撤单、滑点与手续费模型 |
 | 备注 | 这一步是后续接模拟盘和实盘前的重要收敛层 |
+
+### 2026-03-27 第 4 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把回测结果从“粗结果”提升到“更适合正式分析” |
+| 输入 | 已有 DuckDB 回测链路与账户闭环 |
+| 产出 | 手续费、滑点、Profit Factor、平均每笔盈亏等指标 |
+| 结果 | 回测结果已经更接近真实交易摩擦成本 |
+| 未完成 | Sharpe、Sortino、手续费模型细化、更多风险指标 |
+| 备注 | 这一步会直接影响后续 dashboard 和策略评估可信度 |
+
+### 2026-03-27 第 5 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让回测指标更接近正式环境决策需要 |
+| 输入 | 已有交易成本、账户状态、回测链路 |
+| 产出 | Sharpe、Sortino、最长水下期、流动性与滑点容忍拦截 |
+| 结果 | 风险收益视角比之前更完整，回测摘要更适合拿来比较策略 |
+| 未完成 | 更完整订单状态机、dashboard 数据接口、更多长期稳定性指标 |
+| 备注 | 这一步是把“能回测”往“能评估是否值得实盘”推进 |
+
+### 2026-03-27 第 6 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 为 dashboard 准备可直接消费的数据结构 |
+| 输入 | 已完成的回测、账户、绩效指标与交易记录 |
+| 产出 | summary cards、equity curve、drawdown curve、recent trades |
+| 结果 | 后续前端不需要自己拼装回测数据 |
+| 未完成 | 真正的 dashboard 页面与交互 |
+| 备注 | 这是进入 UI 阶段前的关键过渡层 |
+
+### 2026-03-27 第 7 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 dashboard 数据可以被直接查看，而不是只停留在 JSON |
+| 输入 | 已准备好的 dashboard 数据接口 |
+| 产出 | 静态 HTML dashboard 导出能力 |
+| 结果 | 回测结果现在可以直接生成一页可读的研究看板 |
+| 未完成 | 更完整的交互式页面与参数编辑区 |
+| 备注 | 这是正式 UI 前的第一版可视化交付 |
+
+### 2026-03-27 第 8 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把执行闭环再往正式交易系统靠近一步 |
+| 输入 | 已有回测、交易、dashboard 静态导出能力 |
+| 产出 | 订单记录、审计事件流、dashboard 订单区和事件区 |
+| 结果 | 系统不再只输出成交结果，也开始输出执行过程本身 |
+| 未完成 | 撤单、部分成交、重复下单保护、持久化日志 |
+| 备注 | 这一步对未来实盘排错和风控审计很关键 |
+
+### 2026-03-27 第 9 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把回测结果从“生成一次”提升到“可以被持续追踪” |
+| 输入 | 已有回测、订单事件、审计事件和 DuckDB 数据层 |
+| 产出 | `backtest_runs`、`order_events`、`audit_events` 表，以及 `runs` 查询命令 |
+| 结果 | 系统开始拥有可追溯的回测历史，而不只是单次输出 |
+| 未完成 | 更完整的日志查询、运行对比、实盘事件持久化 |
+| 备注 | 这是后续做历史对比、回归分析和 dashboard 历史页的基础 |
+
+### 2026-03-27 第 10 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让持久化结果不仅能存，还能被查询与汇总 |
+| 输入 | 已有 `backtest_runs`、`order_events`、`audit_events` |
+| 产出 | `run-detail`、`orders`、`audit-events`、`history` 查询能力 |
+| 结果 | 系统开始具备真正的历史视图后端能力 |
+| 未完成 | dashboard 历史页 UI、运行对比、日志筛选 |
+| 备注 | 这一步让第 4 层和第 6 层开始真正连接起来 |
 
 ---
 

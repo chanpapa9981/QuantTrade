@@ -25,6 +25,12 @@ data:
   backend: duckdb
   timezone: America/New_York
 
+execution:
+  commission_per_order: 1.0
+  commission_per_share: 0.005
+  min_commission: 1.0
+  simulated_slippage_bps: 5.0
+
 notification:
   provider: telegram
   enabled: false

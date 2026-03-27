@@ -34,7 +34,7 @@ class RiskConfig:
 @dataclass(slots=True)
 class DataConfig:
     duckdb_path: str = "var/data/quanttrade.duckdb"
-    backend: str = "sqlite"
+    backend: str = "duckdb"
     timezone: str = "America/New_York"
 
 
@@ -45,9 +45,18 @@ class NotificationConfig:
 
 
 @dataclass(slots=True)
+class ExecutionConfig:
+    commission_per_order: float = 1.0
+    commission_per_share: float = 0.005
+    min_commission: float = 1.0
+    simulated_slippage_bps: float = 5.0
+
+
+@dataclass(slots=True)
 class Settings:
     app: AppConfig = field(default_factory=AppConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     data: DataConfig = field(default_factory=DataConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)

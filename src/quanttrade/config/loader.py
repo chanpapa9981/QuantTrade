@@ -5,6 +5,7 @@ from pathlib import Path
 from quanttrade.config.models import (
     AppConfig,
     DataConfig,
+    ExecutionConfig,
     NotificationConfig,
     RiskConfig,
     Settings,
@@ -80,5 +81,6 @@ def load_settings(path: str | Path) -> Settings:
         strategy=StrategyConfig(**_section(payload, "strategy")),
         risk=RiskConfig(**_section(payload, "risk")),
         data=DataConfig(**_section(payload, "data")),
+        execution=ExecutionConfig(**_section(payload, "execution")),
         notification=NotificationConfig(**_section(payload, "notification")),
     )

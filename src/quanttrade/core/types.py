@@ -11,6 +11,13 @@ class SignalType(str, Enum):
     LONG_EXIT = "long_exit"
 
 
+class OrderStatus(str, Enum):
+    CREATED = "created"
+    FILLED = "filled"
+    REJECTED = "rejected"
+    SKIPPED = "skipped"
+
+
 @dataclass(slots=True)
 class MarketBar:
     timestamp: datetime
@@ -62,8 +69,15 @@ class StrategyDecision:
 class BacktestMetrics:
     total_return_pct: float
     max_drawdown_pct: float
+    longest_underwater_bars: int
+    sharpe_ratio: float
+    sortino_ratio: float
     win_rate_pct: float
     total_trades: int
+    winning_trades: int
+    losing_trades: int
+    avg_trade_pnl: float
+    profit_factor: float
     ending_equity: float
 
 
@@ -73,7 +87,11 @@ class BacktestRunResult:
     bars_processed: int
     metrics: BacktestMetrics
     trades: list[dict[str, str | float | int]]
+    orders: list[dict[str, str | float | int]]
+    audit_log: list[dict[str, str | float | int]]
     account: dict[str, float | int]
+    equity_curve: list[dict[str, str | float]]
+    drawdown_curve: list[dict[str, str | float]]
 
 
 @dataclass(slots=True)
@@ -84,4 +102,22 @@ class FillEvent:
     quantity: int
     price: float
     reason: str
+    commission: float = 0.0
+    gross_value: float = 0.0
+    net_value: float = 0.0
     pnl: float = 0.0
+
+
+@dataclass(slots=True)
+class OrderEvent:
+    timestamp: datetime
+    symbol: str
+    side: str
+    status: OrderStatus
+    quantity: int
+    requested_price: float
+    fill_price: float = 0.0
+    commission: float = 0.0
+    gross_value: float = 0.0
+    net_value: float = 0.0
+    reason: str = ""
