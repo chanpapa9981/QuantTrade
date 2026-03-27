@@ -629,6 +629,26 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
 
       <div class="stack">
         <section class="panel">
+          <h2 class="panel-title">Order Lifecycles</h2>
+          <div class="panel-note">Grouped order status paths keyed by order ID</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Order ID</th>
+                  <th>Side</th>
+                  <th>Final</th>
+                  <th>Req Qty</th>
+                  <th>Filled</th>
+                  <th>Path</th>
+                </tr>
+              </thead>
+              <tbody id="lifecycle-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Recent Orders</h2>
           <div class="panel-note">Latest persisted order events</div>
           <div class="table-wrap">
@@ -714,6 +734,18 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </tr>
       `).join("");
     }}
+    function renderLifecycles() {{
+      document.getElementById("lifecycle-table").innerHTML = payload.order_lifecycles.map(order => `
+        <tr>
+          <td>${{order.order_id}}</td>
+          <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
+          <td>${{order.final_status}}</td>
+          <td>${{fmt(order.requested_quantity)}}</td>
+          <td>${{fmt(order.filled_quantity)}}</td>
+          <td>${{order.status_path}}</td>
+        </tr>
+      `).join("");
+    }}
     function renderAudit() {{
       document.getElementById("audit-table").innerHTML = payload.recent_audit_events.map(event => `
         <tr>
@@ -726,6 +758,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     }}
     renderCards();
     renderRuns();
+    renderLifecycles();
     renderOrders();
     renderAudit();
   </script>

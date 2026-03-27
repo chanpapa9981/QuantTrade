@@ -1,6 +1,37 @@
 from __future__ import annotations
 
 
+def _build_order_lifecycles(orders: list[dict[str, object]]) -> list[dict[str, object]]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for order in orders:
+        order_id = str(order.get("order_id", ""))
+        grouped.setdefault(order_id, []).append(order)
+
+    lifecycles: list[dict[str, object]] = []
+    for order_id, events in grouped.items():
+        if not order_id:
+            continue
+        first = events[-1]
+        last = events[0]
+        status_path = [str(event.get("status", "")) for event in reversed(events)]
+        lifecycles.append(
+            {
+                "order_id": order_id,
+                "run_id": last.get("run_id", ""),
+                "side": last.get("side", ""),
+                "submitted_at": first.get("timestamp", ""),
+                "last_updated_at": last.get("timestamp", ""),
+                "final_status": last.get("status", ""),
+                "status_path": " -> ".join(status_path),
+                "requested_quantity": first.get("quantity", 0),
+                "filled_quantity": max(int(event.get("filled_quantity", 0)) for event in events),
+                "remaining_quantity": last.get("remaining_quantity", 0),
+            }
+        )
+    lifecycles.sort(key=lambda item: str(item.get("last_updated_at", "")), reverse=True)
+    return lifecycles
+
+
 def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, object]:
     metrics = backtest_result["metrics"]
     trades = backtest_result["trades"]
@@ -66,6 +97,7 @@ def build_history_payload(
             "latest_sharpe_ratio": latest_run.get("sharpe_ratio", 0.0),
         },
         "runs_table": runs,
+        "order_lifecycles": _build_order_lifecycles(orders),
         "recent_orders": orders,
         "recent_audit_events": audit_events,
     }
