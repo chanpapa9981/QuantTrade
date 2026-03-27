@@ -160,6 +160,12 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"orders": repository.fetch_recent_order_events(limit=limit)}
 
+    def order_detail(self, order_id: str) -> dict[str, object]:
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"detail": repository.fetch_order_detail(order_id=order_id)}
+
     def recent_audit_events(self, limit: int = 20) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)

@@ -390,6 +390,25 @@ class BacktestRunRepository:
         finally:
             connection.close()
 
+        orders = [
+            {
+                "order_id": row[0],
+                "timestamp": row[1],
+                "side": row[2],
+                "status": row[3],
+                "quantity": row[4],
+                "filled_quantity": row[5],
+                "remaining_quantity": row[6],
+                "requested_price": row[7],
+                "fill_price": row[8],
+                "commission": row[9],
+                "gross_value": row[10],
+                "net_value": row[11],
+                "reason": row[12],
+            }
+            for row in order_rows
+        ]
+
         return {
             "run": {
                 "run_id": run_row[0],
@@ -408,24 +427,8 @@ class BacktestRunRepository:
                 "avg_trade_pnl": run_row[13],
                 "profit_factor": run_row[14],
             },
-            "orders": [
-                {
-                    "order_id": row[0],
-                    "timestamp": row[1],
-                    "side": row[2],
-                    "status": row[3],
-                    "quantity": row[4],
-                    "filled_quantity": row[5],
-                    "remaining_quantity": row[6],
-                    "requested_price": row[7],
-                    "fill_price": row[8],
-                    "commission": row[9],
-                    "gross_value": row[10],
-                    "net_value": row[11],
-                    "reason": row[12],
-                }
-                for row in order_rows
-            ],
+            "orders": orders,
+            "order_lifecycles": self._build_order_lifecycles(orders),
             "audit_log": [
                 {
                     "timestamp": row[0],
@@ -453,6 +456,73 @@ class BacktestRunRepository:
                 "unrealized_pnl": 0.0,
                 "open_positions": 0,
             },
+        }
+
+    def fetch_order_detail(self, order_id: str) -> dict[str, object] | None:
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            table_names = {table[0] for table in tables}
+            if "order_events" not in table_names:
+                return None
+            order_rows = connection.execute(
+                """
+                SELECT run_id, order_id, timestamp, side, status, quantity, filled_quantity, remaining_quantity,
+                       requested_price, fill_price, commission, gross_value, net_value, reason
+                FROM order_events
+                WHERE order_id = ?
+                ORDER BY timestamp
+                """,
+                (order_id,),
+            ).fetchall()
+            if not order_rows:
+                return None
+            run_id = order_rows[0][0]
+            run_row = None
+            if "backtest_runs" in table_names:
+                run_row = connection.execute(
+                    """
+                    SELECT run_id, symbol, timeframe, started_at
+                    FROM backtest_runs
+                    WHERE run_id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+        finally:
+            connection.close()
+
+        events = [
+            {
+                "run_id": row[0],
+                "order_id": row[1],
+                "timestamp": row[2],
+                "side": row[3],
+                "status": row[4],
+                "quantity": row[5],
+                "filled_quantity": row[6],
+                "remaining_quantity": row[7],
+                "requested_price": row[8],
+                "fill_price": row[9],
+                "commission": row[10],
+                "gross_value": row[11],
+                "net_value": row[12],
+                "reason": row[13],
+            }
+            for row in order_rows
+        ]
+        lifecycles = self._build_order_lifecycles(events)
+        lifecycle = lifecycles[0] if lifecycles else {}
+        return {
+            "order": lifecycle,
+            "events": events,
+            "run": {
+                "run_id": run_row[0],
+                "symbol": run_row[1],
+                "timeframe": run_row[2],
+                "started_at": run_row[3],
+            }
+            if run_row
+            else {"run_id": run_id},
         }
 
     def fetch_recent_order_events(self, limit: int = 20) -> list[dict[str, object]]:
@@ -613,3 +683,35 @@ class BacktestRunRepository:
             "orders": orders,
             "audit_events": audit_events,
         }
+
+    @staticmethod
+    def _build_order_lifecycles(order_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        grouped: dict[str, list[dict[str, object]]] = {}
+        for row in order_rows:
+            order_id = str(row.get("order_id", ""))
+            grouped.setdefault(order_id, []).append(row)
+
+        lifecycles: list[dict[str, object]] = []
+        for order_id, events in grouped.items():
+            statuses = [str(event.get("status", "")) for event in events]
+            first_event = events[0]
+            last_event = events[-1]
+            lifecycles.append(
+                {
+                    "order_id": order_id,
+                    "side": first_event.get("side", ""),
+                    "submitted_at": first_event.get("timestamp", ""),
+                    "last_updated_at": last_event.get("timestamp", ""),
+                    "event_count": len(events),
+                    "status_path": statuses,
+                    "final_status": last_event.get("status", ""),
+                    "requested_quantity": first_event.get("quantity", 0),
+                    "filled_quantity": max(int(event.get("filled_quantity", 0)) for event in events),
+                    "remaining_quantity": last_event.get("remaining_quantity", 0),
+                    "latest_requested_price": last_event.get("requested_price", 0.0),
+                    "latest_fill_price": last_event.get("fill_price", 0.0),
+                    "final_reason": last_event.get("reason", ""),
+                }
+            )
+        lifecycles.sort(key=lambda item: str(item.get("submitted_at", "")))
+        return lifecycles

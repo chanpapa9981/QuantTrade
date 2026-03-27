@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_detail_parser.add_argument("--run-id", required=True, help="Persisted run id")
     orders_parser = subparsers.add_parser("orders", help="List recent persisted order events")
     orders_parser.add_argument("--limit", type=int, default=20, help="Number of order events to list")
+    order_detail_parser = subparsers.add_parser("order-detail", help="Show one persisted order lifecycle detail")
+    order_detail_parser.add_argument("--order-id", required=True, help="Persisted order id")
     audit_parser = subparsers.add_parser("audit-events", help="List recent persisted audit events")
     audit_parser.add_argument("--limit", type=int, default=20, help="Number of audit events to list")
     history_parser = subparsers.add_parser("history", help="Build dashboard-ready historical summary")
@@ -144,6 +146,10 @@ def main() -> None:
 
     if args.command == "orders":
         print(json.dumps(app.recent_order_events(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "order-detail":
+        print(json.dumps(app.order_detail(order_id=args.order_id), indent=2, ensure_ascii=False))
         return
 
     if args.command == "audit-events":

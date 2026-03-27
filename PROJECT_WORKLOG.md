@@ -83,6 +83,7 @@
 | W-031 | 执行层 | 升级订单状态机为部分成交/撤单感知 | 增加 partial fill、cancelled、重复入场保护和剩余数量记录 | 已完成 |
 | W-032 | 执行层 | 增加跨 bar 挂单续撮合与超时撤单 | 支持 open order、继续撮合、timeout cancel、order_id 追踪 | 已完成 |
 | W-033 | 执行层 | 增加 open order 重定价事件 | 支持 `replaced` 状态并记录等待成交时的价格更新 | 已完成 |
+| W-034 | 数据层 | 增加订单生命周期明细查询 | 按 `order_id` 汇总状态路径并查询完整订单事件流 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -161,6 +162,7 @@
 | 2026-03-27 | 跨 bar 挂单续撮合与超时撤单 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
 | 2026-03-27 | 订单查询兼容旧库迁移 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml orders --limit 5` | 通过 |
 | 2026-03-27 | open order 重定价事件 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
+| 2026-03-27 | 订单生命周期明细查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml order-detail --order-id <order_id>` | 通过 |
 
 ---
 
@@ -179,6 +181,7 @@
 | 2026-03-27 | 模拟执行按 bar 流动性模拟部分成交 | 只有全成/拒绝会让执行层过于理想化，无法支撑后续撤单与实盘适配 | 订单、持久化、Dashboard 全部开始感知 filled / partial / cancelled |
 | 2026-03-27 | open order 在回测层而非执行器内部持有 | 跨 bar 生命周期需要和策略评估、审计日志、超时规则一起编排 | 订单可以被继续撮合、超时取消，并保持完整事件历史 |
 | 2026-03-27 | open order 在继续等待时显式记录 `replaced` 事件 | 真实系统里挂单跨 bar 往往伴随重定价或重新提交，仅靠 `open` 无法表达价格变化 | 历史页与审计流开始具备更真实的订单修改语义 |
+| 2026-03-27 | 订单分析默认提升到 order lifecycle 视角 | 仅靠 event list 不利于定位单笔订单最终发生了什么 | 查询层开始同时提供原始事件流和归并后的状态路径摘要 |
 
 ---
 
@@ -208,6 +211,7 @@
 | P0 | 继续强化稳定性层 | 启动恢复细化、失败重试、实盘级运行锁 |
 | P1 | 提升绩效指标丰富度 | 增加更多风险稳定性指标 |
 | P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
+| P1 | 增加 order lifecycle 历史页组件 | 在历史 dashboard 中直接展示单笔订单状态路径 |
 
 ---
 
@@ -390,6 +394,17 @@
 | 结果 | 订单历史开始能反映“继续等待成交但价格已随市场更新”的过程，订单语义更接近真实执行系统 |
 | 未完成 | 更细的 modify 原因、broker 状态映射、实盘级 replace/cancel 约束 |
 | 备注 | 这一步是在为后续接真实券商 API 时减少语义落差 |
+
+### 2026-03-27 第 17 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把订单查询从“事件列表”提升到“单笔订单生命周期”视角 |
+| 输入 | 已有 `order_id` 追踪、created/open/replaced/filled/cancelled 事件流 |
+| 产出 | `order-detail` CLI、`fetch_order_detail` 仓储接口、`run-detail` 中的 `order_lifecycles` 摘要 |
+| 结果 | 现在可以直接查看单笔订单的 `status_path`、最终状态、已成交/剩余数量和相关 run 信息 |
+| 未完成 | 历史页里可视化 order lifecycle、按状态筛选和按 run/order 联动跳转 |
+| 备注 | 这是后续做排错、策略复盘和实盘对账时非常重要的分析入口 |
 
 ---
 
