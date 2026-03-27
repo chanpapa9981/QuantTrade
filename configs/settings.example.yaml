@@ -1,0 +1,30 @@
+app:
+  app_name: QuantTrade
+  environment: dev
+
+strategy:
+  name: atr_dtf
+  symbol: AAPL
+  entry_donchian_n: 20
+  exit_donchian_m: 10
+  atr_smooth_period: 14
+  risk_coefficient_k: 2.0
+  adx_trend_filter: 25.0
+  risk_pct: 0.01
+  max_symbol_weight: 0.10
+
+risk:
+  max_daily_drawdown: 0.03
+  global_max_exposure: 0.80
+  max_open_positions: 5
+  slippage_tolerance: 0.005
+  liquidity_filter: 1000000
+
+data:
+  duckdb_path: var/data/quanttrade.duckdb
+  backend: duckdb
+  timezone: America/New_York
+
+notification:
+  provider: telegram
+  enabled: false
