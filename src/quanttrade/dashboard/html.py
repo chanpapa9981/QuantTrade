@@ -584,6 +584,13 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       border-radius: 10px;
       padding: 8px 10px;
     }}
+    .toolbar-actions {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }}
     .link-button {{
       background: transparent;
       color: var(--accent);
@@ -593,9 +600,29 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       font: inherit;
       text-align: left;
     }}
+    .ghost-button {{
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font: inherit;
+    }}
+    .deep-link {{
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+    }}
     .muted {{
       color: var(--muted);
       font-size: 13px;
+    }}
+    .context-line {{
+      margin-bottom: 12px;
+    }}
+    .row-active {{
+      background: rgba(98, 192, 255, 0.10);
     }}
     .table-wrap {{
       overflow-x: auto;
@@ -647,6 +674,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Run ID</th>
                   <th>Symbol</th>
                   <th>Started</th>
+                  <th>Lifecycles</th>
                   <th>Return %</th>
                   <th>Sharpe</th>
                   <th>Trades</th>
@@ -663,6 +691,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <h2 class="panel-title">Order Lifecycles</h2>
           <div class="panel-note">Grouped order status paths keyed by order ID</div>
           <div class="toolbar">
+            <label for="run-filter">Run</label>
+            <select id="run-filter"></select>
             <label for="lifecycle-filter">Filter</label>
             <select id="lifecycle-filter">
               <option value="all">All</option>
@@ -671,12 +701,18 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <option value="open">Open</option>
               <option value="repriced">Repriced</option>
             </select>
+            <div class="toolbar-actions">
+              <button id="clear-context" class="ghost-button" type="button">Clear Context</button>
+              <a id="deep-link" class="deep-link" href="#">Deep Link</a>
+            </div>
           </div>
+          <div id="selected-context" class="muted context-line"></div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Order ID</th>
+                  <th>Run ID</th>
                   <th>Side</th>
                   <th>Final</th>
                   <th>Req Qty</th>
@@ -697,6 +733,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
             <table>
               <thead>
                 <tr>
+                  <th>Order ID</th>
                   <th>Time</th>
                   <th>Status</th>
                   <th>Req Qty</th>
@@ -717,6 +754,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
             <table>
               <thead>
                 <tr>
+                  <th>Order ID</th>
                   <th>Time</th>
                   <th>Side</th>
                   <th>Status</th>
@@ -756,6 +794,57 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     function fmt(value) {{
       return typeof value === "number" ? value.toLocaleString(undefined, {{ maximumFractionDigits: 4 }}) : value;
     }}
+    function lifecycleCountForRun(runId) {{
+      return payload.order_lifecycles.filter(order => order.run_id === runId).length;
+    }}
+    function availableRunIds() {{
+      return payload.runs_table.map(run => run.run_id);
+    }}
+    function hydrateRunFilter() {{
+      const select = document.getElementById("run-filter");
+      const options = ['<option value="all">All runs</option>'].concat(
+        payload.runs_table.map(run => `<option value="${{run.run_id}}">${{run.run_id}}</option>`)
+      );
+      select.innerHTML = options.join("");
+    }}
+    function findLifecycle(orderId) {{
+      return payload.order_lifecycles.find(order => order.order_id === orderId);
+    }}
+    function readHashState() {{
+      const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const runId = params.get("run") || "all";
+      const lifecycleFilter = params.get("filter") || "all";
+      const orderId = params.get("order") || "";
+      return {{
+        runId: availableRunIds().includes(runId) ? runId : "all",
+        lifecycleFilter: ["all", "filled", "cancelled", "open", "repriced"].includes(lifecycleFilter) ? lifecycleFilter : "all",
+        orderId,
+      }};
+    }}
+    const state = readHashState();
+    function writeHashState() {{
+      const params = new URLSearchParams();
+      if (state.runId !== "all") params.set("run", state.runId);
+      if (state.lifecycleFilter !== "all") params.set("filter", state.lifecycleFilter);
+      if (state.orderId) params.set("order", state.orderId);
+      const hash = params.toString() ? `#${{params.toString()}}` : "";
+      const target = `${{window.location.pathname}}${{window.location.search}}${{hash}}`;
+      if (window.location.hash !== hash) {{
+        window.history.replaceState(null, "", target);
+      }}
+      document.getElementById("deep-link").href = window.location.href;
+    }}
+    function syncControlsToState() {{
+      document.getElementById("run-filter").value = state.runId;
+      document.getElementById("lifecycle-filter").value = state.lifecycleFilter;
+    }}
+    function renderContext() {{
+      const bits = [];
+      bits.push(state.runId === "all" ? "Run: all" : `Run: ${{state.runId}}`);
+      bits.push(`Status: ${{state.lifecycleFilter}}`);
+      bits.push(state.orderId ? `Order: ${{state.orderId}}` : "Order: none selected");
+      document.getElementById("selected-context").textContent = bits.join(" | ");
+    }}
     function renderCards() {{
       const summary = payload.history_summary;
       const cards = [
@@ -777,19 +866,28 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     }}
     function renderRuns() {{
       document.getElementById("runs-table").innerHTML = payload.runs_table.map(run => `
-        <tr>
-          <td>${{run.run_id}}</td>
+        <tr class="${{state.runId === run.run_id ? "row-active" : ""}}">
+          <td><button class="link-button" data-run-id="${{run.run_id}}">${{run.run_id}}</button></td>
           <td>${{run.symbol}}</td>
           <td>${{run.started_at}}</td>
+          <td>${{fmt(lifecycleCountForRun(run.run_id))}}</td>
           <td>${{fmt(run.total_return_pct)}}</td>
           <td>${{fmt(run.sharpe_ratio)}}</td>
           <td>${{fmt(run.total_trades)}}</td>
         </tr>
       `).join("");
+      document.querySelectorAll("[data-run-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          state.runId = node.getAttribute("data-run-id") || "all";
+          renderAll();
+        }});
+      }});
     }}
     function renderOrders() {{
-      document.getElementById("orders-table").innerHTML = payload.recent_orders.map(order => `
-        <tr>
+      const rows = payload.recent_orders.filter(order => state.runId === "all" || order.run_id === state.runId);
+      document.getElementById("orders-table").innerHTML = rows.map(order => `
+        <tr class="${{state.orderId === order.order_id ? "row-active" : ""}}">
+          <td><button class="link-button" data-order-id="${{order.order_id}}">${{order.order_id}}</button></td>
           <td>${{order.timestamp}}</td>
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
           <td>${{order.status}}</td>
@@ -799,24 +897,35 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{order.reason}}</td>
         </tr>
       `).join("");
+      document.querySelectorAll("#orders-table [data-order-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          const orderId = node.getAttribute("data-order-id") || "";
+          const lifecycle = findLifecycle(orderId);
+          if (lifecycle) {{
+            state.orderId = orderId;
+            state.runId = lifecycle.run_id || state.runId;
+            renderAll();
+          }}
+        }});
+      }});
     }}
     function filteredLifecycles() {{
-      const mode = document.getElementById("lifecycle-filter").value;
-      if (mode === "all") return payload.order_lifecycles;
-      if (mode === "repriced") {{
-        return payload.order_lifecycles.filter(order => order.status_path.includes("replaced"));
+      const scoped = payload.order_lifecycles.filter(order => state.runId === "all" || order.run_id === state.runId);
+      if (state.lifecycleFilter === "all") return scoped;
+      if (state.lifecycleFilter === "repriced") {{
+        return scoped.filter(order => order.status_path.includes("replaced"));
       }}
-      return payload.order_lifecycles.filter(order => order.final_status === mode);
+      return scoped.filter(order => order.final_status === state.lifecycleFilter);
     }}
-    let selectedLifecycleOrderId = "";
     function renderLifecycles() {{
       const rows = filteredLifecycles();
-      if (!rows.some(order => order.order_id === selectedLifecycleOrderId)) {{
-        selectedLifecycleOrderId = rows[0]?.order_id ?? "";
+      if (!rows.some(order => order.order_id === state.orderId)) {{
+        state.orderId = rows[0]?.order_id ?? "";
       }}
       document.getElementById("lifecycle-table").innerHTML = rows.map(order => `
-        <tr>
+        <tr class="${{state.orderId === order.order_id ? "row-active" : ""}}">
           <td><button class="link-button" data-order-id="${{order.order_id}}">${{order.order_id}}</button></td>
+          <td><button class="link-button" data-run-id="${{order.run_id}}">${{order.run_id}}</button></td>
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
           <td>${{order.final_status}}</td>
           <td>${{fmt(order.requested_quantity)}}</td>
@@ -824,22 +933,29 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{order.status_path}}</td>
         </tr>
       `).join("");
-      document.querySelectorAll("[data-order-id]").forEach(node => {{
+      document.querySelectorAll("#lifecycle-table [data-order-id]").forEach(node => {{
         node.addEventListener("click", () => {{
-          selectedLifecycleOrderId = node.getAttribute("data-order-id") || "";
-          renderLifecycleDetail();
+          state.orderId = node.getAttribute("data-order-id") || "";
+          renderAll();
+        }});
+      }});
+      document.querySelectorAll("#lifecycle-table [data-run-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          state.runId = node.getAttribute("data-run-id") || "all";
+          renderAll();
         }});
       }});
       renderLifecycleDetail();
     }}
     function renderLifecycleDetail() {{
-      const events = payload.order_lifecycle_details[selectedLifecycleOrderId] || [];
-      const lifecycle = payload.order_lifecycles.find(order => order.order_id === selectedLifecycleOrderId);
+      const events = payload.order_lifecycle_details[state.orderId] || [];
+      const lifecycle = findLifecycle(state.orderId);
       document.getElementById("lifecycle-detail-meta").textContent = lifecycle
-        ? `Order ${{lifecycle.order_id}} | Final: ${{lifecycle.final_status}} | Path: ${{lifecycle.status_path}}`
+        ? `Order ${{lifecycle.order_id}} | Run: ${{lifecycle.run_id}} | Final: ${{lifecycle.final_status}} | Path: ${{lifecycle.status_path}}`
         : "No order selected.";
       document.getElementById("lifecycle-detail-table").innerHTML = events.map(event => `
         <tr>
+          <td>${{event.order_id}}</td>
           <td>${{event.timestamp}}</td>
           <td>${{event.status}}</td>
           <td>${{fmt(event.quantity)}}</td>
@@ -850,7 +966,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
     function renderAudit() {{
-      document.getElementById("audit-table").innerHTML = payload.recent_audit_events.map(event => `
+      const rows = payload.recent_audit_events.filter(event => state.runId === "all" || event.run_id === state.runId);
+      document.getElementById("audit-table").innerHTML = rows.map(event => `
         <tr>
           <td>${{event.timestamp}}</td>
           <td>${{event.event}}</td>
@@ -859,12 +976,39 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </tr>
       `).join("");
     }}
+    function renderAll() {{
+      syncControlsToState();
+      renderContext();
+      renderRuns();
+      renderLifecycles();
+      renderOrders();
+      renderAudit();
+      writeHashState();
+    }}
+    hydrateRunFilter();
     renderCards();
-    renderRuns();
-    renderLifecycles();
-    renderOrders();
-    renderAudit();
-    document.getElementById("lifecycle-filter").addEventListener("change", renderLifecycles);
+    renderAll();
+    document.getElementById("run-filter").addEventListener("change", event => {{
+      state.runId = event.target.value || "all";
+      renderAll();
+    }});
+    document.getElementById("lifecycle-filter").addEventListener("change", event => {{
+      state.lifecycleFilter = event.target.value || "all";
+      renderAll();
+    }});
+    document.getElementById("clear-context").addEventListener("click", () => {{
+      state.runId = "all";
+      state.lifecycleFilter = "all";
+      state.orderId = "";
+      renderAll();
+    }});
+    window.addEventListener("hashchange", () => {{
+      const next = readHashState();
+      state.runId = next.runId;
+      state.lifecycleFilter = next.lifecycleFilter;
+      state.orderId = next.orderId;
+      renderAll();
+    }});
   </script>
 </body>
 </html>

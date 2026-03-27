@@ -25,7 +25,7 @@
 | 项目类型 | 个人自动化交易系统（ATS） |
 | 开发基线 | [README_DEV.md](/Users/andy/Documents/QuantTrade/README_DEV.md) |
 | 原始需求 | [README.md](/Users/andy/Documents/QuantTrade/README.md) |
-| 当前阶段 | 阶段 2：数据层与完整回测 |
+| 当前阶段 | 阶段 3/5/6：完整回测、执行状态机与 Dashboard 历史视图 |
 | 当前状态 | 进行中 |
 | 默认技术方向 | Python + DuckDB + YAML + Web Dashboard + Docker |
 | 目标环境 | Mac mini |
@@ -38,14 +38,14 @@
 | :--- | :--- | :--- | :--- | :--- |
 | 0 | 需求整理 | 把理念型需求整理成开发型说明书 | 开发基线文档 | 已完成 |
 | 1 | 项目骨架 | 搭建目录结构、配置、CLI、核心模块骨架 | 可运行的最小链路 | 已完成 |
-| 2 | 数据层 | 导入历史行情并落库到 DuckDB | 可查询的本地行情库 | 进行中 |
+| 2 | 数据层 | 导入历史行情并落库到 DuckDB | 可查询的本地行情库 | 已完成 |
 | 3 | 回测引擎 | 基于历史数据跑完整回测 | 回测结果与核心指标 | 进行中 |
 | 4 | 风控完善 | 完成账户级与标的级风控规则 | 风控拦截与风控日志 | 未开始 |
-| 5 | 模拟执行 | 完成订单、成交、持仓、账户状态变更 | 模拟盘闭环 | 未开始 |
-| 6 | Dashboard | 展示参数、日志、净值、持仓、策略状态 | 基础 Web 面板 | 未开始 |
+| 5 | 模拟执行 | 完成订单、成交、持仓、账户状态变更 | 模拟盘闭环 | 进行中 |
+| 6 | Dashboard | 展示参数、日志、净值、持仓、策略状态 | 基础 Web 面板 | 进行中 |
 | 7 | Schwab 接入 | 实现认证、账户同步、基础下单能力 | 实盘基础接入 | 未开始 |
 | 8 | 通知与告警 | 推送交易动作与风险事件 | 手机通知闭环 | 未开始 |
-| 9 | 稳定性增强 | 断网重连、状态对账、异常恢复 | 可试运行版本 | 未开始 |
+| 9 | 稳定性增强 | 断网重连、状态对账、异常恢复 | 可试运行版本 | 进行中 |
 
 ---
 
@@ -88,6 +88,7 @@
 | W-036 | Dashboard | 增加历史页订单生命周期统计卡片 | 展示 lifecycle filled/cancelled/repriced 等摘要数量 | 已完成 |
 | W-037 | Dashboard | 增加历史页生命周期状态筛选 | 支持按 all/filled/cancelled/open/repriced 过滤生命周期表 | 已完成 |
 | W-038 | Dashboard | 增加历史页订单生命周期详情联动 | 点击 lifecycle 行即可查看该订单的原始事件明细 | 已完成 |
+| W-039 | Dashboard | 增加历史页深链接与 run/order 联动 | 支持 URL hash 定位、run scope 筛选和跨表联动跳转 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -171,6 +172,7 @@
 | 2026-03-27 | 历史页生命周期统计卡片 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
 | 2026-03-27 | 历史页生命周期状态筛选 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
 | 2026-03-27 | 历史页订单生命周期详情联动 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
+| 2026-03-27 | 历史页深链接与 run/order 联动 | `PYTHONPATH=src python3 -m unittest tests.test_history_html -v` | 通过 |
 
 ---
 
@@ -194,6 +196,7 @@
 | 2026-03-27 | 历史 dashboard 增加 lifecycle 聚合卡片 | 长表格之外需要一眼看出订单状态分布，方便快速复盘 | 历史页开始兼顾总览和明细两种阅读方式 |
 | 2026-03-27 | 历史页筛选先做前端静态过滤 | 当前页面是静态 HTML，前端内筛选比新增后端接口更轻量且足够解决大部分复盘需求 | 不改数据接口也能提升历史页可用性 |
 | 2026-03-27 | 历史页订单详情先做同页联动而不是页面跳转 | 静态 HTML 下同页联动实现成本更低、体验也更顺滑 | 先满足复盘排错需求，后续若做服务端再扩展深链接 |
+| 2026-03-27 | 历史页上下文定位先采用 URL hash | 静态 HTML 不适合引入服务端路由，但复盘又需要可分享的具体上下文 | 同一份历史页即可支持 run/order/filter 深链接和跨表联动 |
 
 ---
 
@@ -223,9 +226,9 @@
 | P0 | 继续强化稳定性层 | 启动恢复细化、失败重试、实盘级运行锁 |
 | P1 | 提升绩效指标丰富度 | 增加更多风险稳定性指标 |
 | P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
-| P1 | 增加 order lifecycle 历史页组件 | 增加状态筛选、按 run/order 跳转、更多摘要字段 |
-| P1 | 增加历史页生命周期筛选交互 | 增加按 run/order 跳转和多条件组合筛选 |
-| P1 | 增加历史页订单详情深链接 | 支持从 lifecycle 表跳到单笔订单详情视图或导出 |
+| P1 | 继续完善订单状态机 | 引入更多对账字段、order modify 细分原因、broker 状态映射 |
+| P1 | 增加历史页多条件组合筛选 | 同时支持 run/status/side 等组合筛选和异常聚焦 |
+| P1 | 增加历史页更强的分享态 | 支持复制上下文链接、默认聚焦异常订单、扩展摘要信息 |
 
 ---
 
@@ -484,6 +487,18 @@
 | 为什么这么做 | 因为真正高效的排错流程应该尽量少跳转页面；把发现问题和查看明细放在同一页，复盘速度会明显更快。 |
 | 未完成 | URL 深链接、多条件筛选、跨 run/order 的联动导航 |
 | 备注 | 这一步让历史页更接近一个轻量的订单排错工作台 |
+
+### 2026-03-27 第 22 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让历史页具备可分享的上下文定位能力，并把 run/order/filter 在同一页联动起来 |
+| 输入 | 已有 lifecycle 表、详情联动、状态筛选和历史 run/order/audit 数据 |
+| 产出 | `run-filter`、URL hash 深链接、run/order 联动跳转、上下文清除按钮、按 run 作用域过滤的 runs/orders/audit 视图 |
+| 结果 | 现在同一份 `history.html` 可以直接定位到某个 run、某种 lifecycle 状态和某笔订单，复盘上下文可被保留下来并复用 |
+| 为什么这么做 | 因为历史页一旦开始承担排错职责，就不能只“展示信息”，还要能稳定地回到某个具体上下文；深链接和联动是让静态页面真正可协作的关键一步。 |
+| 未完成 | 多条件组合筛选、复制链接体验、更多异常摘要与实盘语义映射 |
+| 备注 | 这一步把静态历史页继续推进成“可分享的轻量排错台” |
 
 ---
 
