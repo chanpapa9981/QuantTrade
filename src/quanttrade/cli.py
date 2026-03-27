@@ -48,6 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
     history_parser = subparsers.add_parser("history", help="Build dashboard-ready historical summary")
     history_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to include")
     history_parser.add_argument("--events-limit", type=int, default=20, help="Number of order/audit events to include")
+    history_html_parser = subparsers.add_parser("history-html", help="Build a static history HTML file")
+    history_html_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to include")
+    history_html_parser.add_argument("--events-limit", type=int, default=20, help="Number of order/audit events to include")
+    history_html_parser.add_argument("--output", default="var/reports/history.html", help="Output HTML path")
     return parser
 
 
@@ -144,6 +148,20 @@ def main() -> None:
         print(
             json.dumps(
                 app.dashboard_history(runs_limit=args.runs_limit, events_limit=args.events_limit),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if args.command == "history-html":
+        print(
+            json.dumps(
+                app.export_history_html(
+                    runs_limit=args.runs_limit,
+                    events_limit=args.events_limit,
+                    output_path=args.output,
+                ),
                 indent=2,
                 ensure_ascii=False,
             )

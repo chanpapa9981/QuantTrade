@@ -459,3 +459,270 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
 """
     path.write_text(html, encoding="utf-8")
     return str(path)
+
+
+def render_history_html(payload: dict[str, object], output_path: str) -> str:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data_json = json.dumps(payload, ensure_ascii=False)
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QuantTrade History</title>
+  <style>
+    :root {{
+      --bg: #0a0f1a;
+      --panel: #121a29;
+      --panel-alt: #172235;
+      --text: #edf3ff;
+      --muted: #93a9c7;
+      --accent: #62c0ff;
+      --accent-2: #95f2b2;
+      --warn: #ffbf69;
+      --line: rgba(255,255,255,0.08);
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(98, 192, 255, 0.12), transparent 24%),
+        linear-gradient(180deg, #050b14 0%, var(--bg) 100%);
+      color: var(--text);
+    }}
+    .shell {{
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 40px 20px 56px;
+    }}
+    .hero {{
+      margin-bottom: 24px;
+    }}
+    .eyebrow {{
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }}
+    h1 {{
+      margin: 0 0 10px;
+      font-size: clamp(30px, 5vw, 54px);
+      line-height: 0.95;
+    }}
+    .subcopy {{
+      color: var(--muted);
+      max-width: 760px;
+      line-height: 1.6;
+    }}
+    .card-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 14px;
+      margin-bottom: 20px;
+    }}
+    .card, .panel {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 24px 50px rgba(0,0,0,0.22);
+    }}
+    .card {{
+      padding: 18px;
+    }}
+    .card-label {{
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }}
+    .card-value {{
+      font-size: 30px;
+      font-weight: 700;
+    }}
+    .layout {{
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 16px;
+    }}
+    .stack {{
+      display: grid;
+      gap: 16px;
+    }}
+    .panel {{
+      padding: 18px;
+    }}
+    .panel-title {{
+      margin: 0 0 4px;
+      font-size: 18px;
+    }}
+    .panel-note {{
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 14px;
+    }}
+    .table-wrap {{
+      overflow-x: auto;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }}
+    th, td {{
+      text-align: left;
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }}
+    th {{
+      color: var(--muted);
+      font-weight: 600;
+    }}
+    .buy {{ color: var(--accent-2); }}
+    .sell {{ color: var(--warn); }}
+    @media (max-width: 980px) {{
+      .layout {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow">QuantTrade History</div>
+      <h1>Run History Dashboard</h1>
+      <div class="subcopy">
+        A static history view generated from persisted backtest runs, order events, and audit events.
+        This page is intended for reviewing how the system has behaved across multiple runs without starting an app server.
+      </div>
+    </section>
+
+    <section id="summary-cards" class="card-grid"></section>
+
+    <section class="layout">
+      <div class="stack">
+        <section class="panel">
+          <h2 class="panel-title">Recent Runs</h2>
+          <div class="panel-note">Most recent persisted backtest runs</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Run ID</th>
+                  <th>Symbol</th>
+                  <th>Started</th>
+                  <th>Return %</th>
+                  <th>Sharpe</th>
+                  <th>Trades</th>
+                </tr>
+              </thead>
+              <tbody id="runs-table"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <h2 class="panel-title">Recent Orders</h2>
+          <div class="panel-note">Latest persisted order events</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Side</th>
+                  <th>Status</th>
+                  <th>Qty</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="orders-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Recent Audit Events</h2>
+          <div class="panel-note">Latest strategy and risk events</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Event</th>
+                  <th>Signal</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="audit-table"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <script>
+    const payload = {data_json};
+    function fmt(value) {{
+      return typeof value === "number" ? value.toLocaleString(undefined, {{ maximumFractionDigits: 4 }}) : value;
+    }}
+    function renderCards() {{
+      const summary = payload.history_summary;
+      const cards = [
+        {{ label: "Total Runs", value: summary.total_runs }},
+        {{ label: "Latest Symbol", value: summary.latest_symbol }},
+        {{ label: "Latest Return %", value: summary.latest_return_pct }},
+        {{ label: "Latest Sharpe", value: summary.latest_sharpe_ratio }},
+      ];
+      document.getElementById("summary-cards").innerHTML = cards.map(card => `
+        <article class="card">
+          <div class="card-label">${{card.label}}</div>
+          <div class="card-value">${{fmt(card.value)}}</div>
+        </article>
+      `).join("");
+    }}
+    function renderRuns() {{
+      document.getElementById("runs-table").innerHTML = payload.runs_table.map(run => `
+        <tr>
+          <td>${{run.run_id}}</td>
+          <td>${{run.symbol}}</td>
+          <td>${{run.started_at}}</td>
+          <td>${{fmt(run.total_return_pct)}}</td>
+          <td>${{fmt(run.sharpe_ratio)}}</td>
+          <td>${{fmt(run.total_trades)}}</td>
+        </tr>
+      `).join("");
+    }}
+    function renderOrders() {{
+      document.getElementById("orders-table").innerHTML = payload.recent_orders.map(order => `
+        <tr>
+          <td>${{order.timestamp}}</td>
+          <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
+          <td>${{order.status}}</td>
+          <td>${{fmt(order.quantity)}}</td>
+          <td>${{order.reason}}</td>
+        </tr>
+      `).join("");
+    }}
+    function renderAudit() {{
+      document.getElementById("audit-table").innerHTML = payload.recent_audit_events.map(event => `
+        <tr>
+          <td>${{event.timestamp}}</td>
+          <td>${{event.event}}</td>
+          <td>${{event.signal}}</td>
+          <td>${{event.reason}}</td>
+        </tr>
+      `).join("");
+    }}
+    renderCards();
+    renderRuns();
+    renderOrders();
+    renderAudit();
+  </script>
+</body>
+</html>
+"""
+    path.write_text(html, encoding="utf-8")
+    return str(path)

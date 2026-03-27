@@ -9,7 +9,7 @@ from quanttrade.backtest.exporter import export_backtest_result
 from quanttrade.config.loader import load_settings
 from quanttrade.core.types import AccountState, MarketBar, PositionState
 from quanttrade.dashboard.service import build_dashboard_payload, build_history_payload
-from quanttrade.dashboard.html import render_dashboard_html
+from quanttrade.dashboard.html import render_dashboard_html, render_history_html
 from quanttrade.data.importer import import_bars_from_csv
 from quanttrade.data.repository import BacktestRunRepository, BarRepository
 from quanttrade.data.schema import create_schema
@@ -180,4 +180,19 @@ class QuantTradeApp:
             "symbol": symbol,
             "summary_cards": len(payload["summary_cards"]),
             "recent_trades": len(payload["recent_trades"]),
+        }
+
+    def export_history_html(
+        self,
+        runs_limit: int = 20,
+        events_limit: int = 20,
+        output_path: str = "var/reports/history.html",
+    ) -> dict[str, object]:
+        payload = self.dashboard_history(runs_limit=runs_limit, events_limit=events_limit)
+        written_path = render_history_html(payload, output_path)
+        return {
+            "output_path": written_path,
+            "runs": len(payload["runs_table"]),
+            "orders": len(payload["recent_orders"]),
+            "audit_events": len(payload["recent_audit_events"]),
         }
