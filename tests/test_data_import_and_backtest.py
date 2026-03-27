@@ -245,6 +245,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         statuses = [order["status"] for order in backtest_result["orders"]]
         self.assertIn("created", statuses)
         self.assertIn("open", statuses)
+        self.assertIn("replaced", statuses)
         self.assertIn("cancelled", statuses)
         self.assertEqual(backtest_result["account"]["open_positions"], 0)
 

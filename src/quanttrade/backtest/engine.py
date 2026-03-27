@@ -139,6 +139,31 @@ class BacktestEngine:
                     self._append_curves(equity_timeline, drawdown_timeline, equity_curve, bar.timestamp.isoformat(), account_state.equity)
                     continue
 
+                if round(pending_order.requested_price, 4) != round(bar.close, 4):
+                    replace_event = OrderEvent(
+                        timestamp=bar.timestamp,
+                        order_id=pending_order.order_id,
+                        symbol=symbol,
+                        side=pending_order.side,
+                        status=OrderStatus.REPLACED,
+                        quantity=pending_order.remaining_quantity,
+                        requested_price=bar.close,
+                        filled_quantity=0,
+                        remaining_quantity=pending_order.remaining_quantity,
+                        reason="order repriced to current bar close while waiting for liquidity",
+                    )
+                    orders.append(self._serialize_order_event(replace_event))
+                    audit_log.append(
+                        {
+                            "timestamp": bar.timestamp.isoformat(),
+                            "event": "order_replaced",
+                            "signal": "long_entry" if pending_order.side == "BUY" else "long_exit",
+                            "reason": "order repriced to current bar close while waiting for liquidity",
+                            "risk_allowed": 1,
+                        }
+                    )
+                    pending_order.requested_price = bar.close
+
                 execution = self.execution_engine.execute(
                     timestamp=bar.timestamp,
                     order_id=pending_order.order_id,

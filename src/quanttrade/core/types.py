@@ -14,6 +14,7 @@ class SignalType(str, Enum):
 class OrderStatus(str, Enum):
     CREATED = "created"
     OPEN = "open"
+    REPLACED = "replaced"
     FILLED = "filled"
     PARTIALLY_FILLED = "partially_filled"
     CANCELLED = "cancelled"

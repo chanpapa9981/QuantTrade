@@ -82,6 +82,7 @@
 | W-030 | 稳定性 | 增加回测执行生命周期与重复执行保护 | 跟踪 running/completed/abandoned 并拦截同标的重复执行 | 已完成 |
 | W-031 | 执行层 | 升级订单状态机为部分成交/撤单感知 | 增加 partial fill、cancelled、重复入场保护和剩余数量记录 | 已完成 |
 | W-032 | 执行层 | 增加跨 bar 挂单续撮合与超时撤单 | 支持 open order、继续撮合、timeout cancel、order_id 追踪 | 已完成 |
+| W-033 | 执行层 | 增加 open order 重定价事件 | 支持 `replaced` 状态并记录等待成交时的价格更新 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -159,6 +160,7 @@
 | 2026-03-27 | 订单状态机持久化链路 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml backtest --symbol AAPL --timeframe 1d --initial-equity 100000 --persist` | 通过 |
 | 2026-03-27 | 跨 bar 挂单续撮合与超时撤单 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
 | 2026-03-27 | 订单查询兼容旧库迁移 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml orders --limit 5` | 通过 |
+| 2026-03-27 | open order 重定价事件 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
 
 ---
 
@@ -176,6 +178,7 @@
 | 2026-03-27 | 持久化回测增加 execution lifecycle | 需要区分“运行中 / 完成 / 中断恢复”，并阻止同标的重复触发 | 为启动恢复和稳定性观测提供统一入口 |
 | 2026-03-27 | 模拟执行按 bar 流动性模拟部分成交 | 只有全成/拒绝会让执行层过于理想化，无法支撑后续撤单与实盘适配 | 订单、持久化、Dashboard 全部开始感知 filled / partial / cancelled |
 | 2026-03-27 | open order 在回测层而非执行器内部持有 | 跨 bar 生命周期需要和策略评估、审计日志、超时规则一起编排 | 订单可以被继续撮合、超时取消，并保持完整事件历史 |
+| 2026-03-27 | open order 在继续等待时显式记录 `replaced` 事件 | 真实系统里挂单跨 bar 往往伴随重定价或重新提交，仅靠 `open` 无法表达价格变化 | 历史页与审计流开始具备更真实的订单修改语义 |
 
 ---
 
@@ -199,9 +202,9 @@
 | P0 | 完善订单与账户状态模型 | 为模拟执行闭环做准备 |
 | P0 | 增加回测结果导出 | 为 dashboard 提供输入文件 |
 | P0 | 开始更完整的 dashboard 页面骨架 | 增加参数面板、日志区和更细的图表布局 |
-| P0 | 继续完善订单状态机 | 引入跨 bar 部分成交续撮合、更多对账字段、order replace/cancel reason |
+| P0 | 继续完善订单状态机 | 引入更多对账字段、order modify 细分原因、broker 状态映射 |
 | P0 | 开始 dashboard 历史页 | 使用已落库的 run/order/audit 数据 |
-| P0 | 继续完善订单状态机 | 引入跨 bar 部分成交续撮合、更多对账字段、order replace/cancel reason |
+| P0 | 继续完善订单状态机 | 引入更多对账字段、order modify 细分原因、broker 状态映射 |
 | P0 | 继续强化稳定性层 | 启动恢复细化、失败重试、实盘级运行锁 |
 | P1 | 提升绩效指标丰富度 | 增加更多风险稳定性指标 |
 | P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
@@ -376,6 +379,17 @@
 | 结果 | 回测开始能表达“订单提交后继续等待成交”的真实流程，订单历史可按同一 `order_id` 串起来看 |
 | 未完成 | replace/modify 订单、跨 bar 价格偏离重定价、实盘对账字段、broker 状态映射 |
 | 备注 | 这一步让执行层更像一个真正的订单状态机，而不只是成交事件生成器 |
+
+### 2026-03-27 第 16 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 open order 在继续等待时也能显式表达价格调整，而不是只有 open/cancel |
+| 输入 | 已有 open order、timeout cancel、order_id 持续追踪能力 |
+| 产出 | `replaced` 状态、等待成交期间的重定价事件、dashboard 订单摘要补充 replaced count |
+| 结果 | 订单历史开始能反映“继续等待成交但价格已随市场更新”的过程，订单语义更接近真实执行系统 |
+| 未完成 | 更细的 modify 原因、broker 状态映射、实盘级 replace/cancel 约束 |
+| 备注 | 这一步是在为后续接真实券商 API 时减少语义落差 |
 
 ---
 
