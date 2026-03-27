@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_html_parser.add_argument("--output", default="var/reports/dashboard.html", help="Output HTML path")
     runs_parser = subparsers.add_parser("runs", help="List recent persisted backtest runs")
     runs_parser.add_argument("--limit", type=int, default=10, help="Number of runs to list")
+    executions_parser = subparsers.add_parser("executions", help="List recent backtest execution attempts")
+    executions_parser.add_argument("--limit", type=int, default=10, help="Number of executions to list")
     run_detail_parser = subparsers.add_parser("run-detail", help="Show one persisted backtest run detail")
     run_detail_parser.add_argument("--run-id", required=True, help="Persisted run id")
     orders_parser = subparsers.add_parser("orders", help="List recent persisted order events")
@@ -130,6 +132,10 @@ def main() -> None:
 
     if args.command == "runs":
         print(json.dumps(app.recent_backtest_runs(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "executions":
+        print(json.dumps(app.recent_backtest_executions(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "run-detail":

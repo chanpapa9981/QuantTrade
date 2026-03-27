@@ -13,7 +13,7 @@ from quanttrade.dashboard.html import render_dashboard_html, render_history_html
 from quanttrade.data.importer import import_bars_from_csv
 from quanttrade.data.repository import BacktestRunRepository, BarRepository
 from quanttrade.data.schema import create_schema
-from quanttrade.data.storage import database_lock, ensure_data_dirs
+from quanttrade.data.storage import database_lock, ensure_data_dirs, execution_lock
 from quanttrade.execution.simulator import SimulatedExecutionEngine
 from quanttrade.risk.engine import RiskEngine
 from quanttrade.strategies.atr_dtf import AtrDynamicTrendFollowingStrategy
@@ -93,31 +93,57 @@ class QuantTradeApp:
         timeframe: str = "1d",
         initial_equity: float = 100_000.0,
     ) -> dict[str, object]:
-        with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
-            repository = BarRepository(self.settings.data.duckdb_path)
-            bars = repository.fetch_bars(symbol=symbol, timeframe=timeframe)
+        execution_id = ""
+        recovered_executions = 0
+        with execution_lock(self.settings.data.duckdb_path, symbol=symbol, timeframe=timeframe, blocking=False):
+            with database_lock(self.settings.data.duckdb_path):
+                create_schema(self.settings.data.duckdb_path)
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                recovered_executions = repository.recover_stale_executions(symbol=symbol, timeframe=timeframe)
+                execution_id = repository.create_execution(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    initial_equity=initial_equity,
+                )
+                bar_repository = BarRepository(self.settings.data.duckdb_path)
+                bars = bar_repository.fetch_bars(symbol=symbol, timeframe=timeframe)
+
             strategy_config = self.settings.strategy
             strategy_config.symbol = symbol
             strategy = AtrDynamicTrendFollowingStrategy(strategy_config)
             risk_engine = RiskEngine(self.settings.risk)
             execution_engine = SimulatedExecutionEngine(self.settings.execution)
             engine = BacktestEngine(strategy, risk_engine, execution_engine)
-            payload = asdict(engine.run_series(bars=bars, initial_equity=initial_equity))
-            repository = BacktestRunRepository(self.settings.data.duckdb_path)
-            run_id = repository.save_run(symbol=symbol, timeframe=timeframe, payload=payload)
+            try:
+                payload = asdict(engine.run_series(bars=bars, initial_equity=initial_equity))
+                with database_lock(self.settings.data.duckdb_path):
+                    repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                    run_id = repository.save_run(symbol=symbol, timeframe=timeframe, payload=payload)
+                    repository.mark_execution_completed(execution_id=execution_id, run_id=run_id)
+            except Exception as exc:
+                with database_lock(self.settings.data.duckdb_path):
+                    repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                    repository.mark_execution_failed(execution_id=execution_id, error_message=str(exc))
+                raise
         return {
+            "execution_id": execution_id,
             "run_id": run_id,
             "symbol": symbol,
             "timeframe": timeframe,
             "bars_processed": payload["bars_processed"],
             "metrics": payload["metrics"],
+            "recovered_executions": recovered_executions,
         }
 
     def recent_backtest_runs(self, limit: int = 10) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"runs": repository.fetch_recent_runs(limit=limit)}
+
+    def recent_backtest_executions(self, limit: int = 10) -> dict[str, object]:
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"executions": repository.fetch_recent_executions(limit=limit)}
 
     def backtest_run_detail(self, run_id: str) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):

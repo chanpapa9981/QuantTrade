@@ -5,9 +5,31 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from quanttrade.app import QuantTradeApp
+from quanttrade.data.repository import BacktestRunRepository
+from quanttrade.data.schema import create_schema
+from quanttrade.data.storage import LockUnavailableError, database_lock, execution_lock
 
 
 class DataImportAndBacktestTestCase(unittest.TestCase):
+    def _write_config(self, config_path: Path, db_path: Path) -> None:
+        config_path.write_text(
+            "\n".join(
+                [
+                    "strategy:",
+                    "  symbol: AAPL",
+                    "  entry_donchian_n: 5",
+                    "  exit_donchian_m: 3",
+                    "  atr_smooth_period: 5",
+                    "  risk_coefficient_k: 2.0",
+                    "  adx_trend_filter: 5.0",
+                    "data:",
+                    f"  duckdb_path: {db_path}",
+                    "  backend: sqlite",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
     def test_import_csv_and_run_backtest(self) -> None:
         base_dir = Path("var/test-artifacts/integration")
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -36,23 +58,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     }
                 )
 
-        config_path.write_text(
-            "\n".join(
-                [
-                    "strategy:",
-                    "  symbol: AAPL",
-                    "  entry_donchian_n: 5",
-                    "  exit_donchian_m: 3",
-                    "  atr_smooth_period: 5",
-                    "  risk_coefficient_k: 2.0",
-                    "  adx_trend_filter: 5.0",
-                    "data:",
-                    f"  duckdb_path: {db_path}",
-                    "  backend: sqlite",
-                ]
-            ),
-            encoding="utf-8",
-        )
+        self._write_config(config_path, db_path)
 
         app = QuantTradeApp(str(config_path))
         import_result = app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
@@ -70,6 +76,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
             initial_equity=100_000.0,
         )
         recent_runs = app.recent_backtest_runs(limit=5)
+        recent_executions = app.recent_backtest_executions(limit=5)
         run_detail = app.backtest_run_detail(run_id=persist_result["run_id"])
         recent_orders = app.recent_order_events(limit=5)
         recent_audit = app.recent_audit_events(limit=5)
@@ -94,12 +101,96 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertTrue(report_path.exists())
         self.assertEqual(export_result["output_path"], str(report_path))
         self.assertIn("run_id", persist_result)
+        self.assertIn("execution_id", persist_result)
+        self.assertEqual(persist_result["recovered_executions"], 0)
         self.assertGreaterEqual(len(recent_runs["runs"]), 1)
+        self.assertGreaterEqual(len(recent_executions["executions"]), 1)
+        self.assertEqual(recent_executions["executions"][0]["status"], "completed")
         self.assertIsNotNone(run_detail["detail"])
         self.assertIn("account_snapshot", run_detail["detail"])
         self.assertGreaterEqual(len(recent_orders["orders"]), 1)
         self.assertGreaterEqual(len(recent_audit["audit_events"]), 1)
         self.assertIn("history_summary", history_payload)
+
+    def test_persist_backtest_run_recovers_stale_execution(self) -> None:
+        base_dir = Path("var/test-artifacts/execution-recovery")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "recovery-test.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 5, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(30):
+                current = start + timedelta(days=offset)
+                price += 1.1
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.7, 2),
+                        "high": round(price + 0.6, 2),
+                        "low": round(price - 1.0, 2),
+                        "close": round(price, 2),
+                        "volume": 2_000_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(config_path, db_path)
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            repository.create_execution(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+
+        persist_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        recent_executions = app.recent_backtest_executions(limit=5)
+
+        self.assertEqual(persist_result["recovered_executions"], 1)
+        self.assertEqual(recent_executions["executions"][0]["status"], "completed")
+        self.assertEqual(recent_executions["executions"][1]["status"], "abandoned")
+
+    def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
+        base_dir = Path("var/test-artifacts/execution-lock")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "lock-test.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 6, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(10):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.6, 2),
+                        "high": round(price + 0.4, 2),
+                        "low": round(price - 0.9, 2),
+                        "close": round(price, 2),
+                        "volume": 2_100_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(config_path, db_path)
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+
+        with execution_lock(str(db_path), symbol="AAPL", timeframe="1d", blocking=False):
+            with self.assertRaises(LockUnavailableError):
+                app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
 
 
 if __name__ == "__main__":

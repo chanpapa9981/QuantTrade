@@ -79,6 +79,7 @@
 | W-027 | 数据层 | 增加运行历史查询接口 | 查询 run detail、order events、audit events | 已完成 |
 | W-028 | Dashboard | 增加历史视图静态页面 | 把 persisted runs/order/audit 生成 HTML | 已完成 |
 | W-029 | 稳定性 | 增加数据库文件锁与账户快照落库 | 降低 DuckDB 锁冲突并提升追溯性 | 已完成 |
+| W-030 | 稳定性 | 增加回测执行生命周期与重复执行保护 | 跟踪 running/completed/abandoned 并拦截同标的重复执行 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -150,6 +151,8 @@
 | 2026-03-27 | 历史摘要查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history --runs-limit 5 --events-limit 5` | 通过 |
 | 2026-03-27 | 历史 HTML 导出 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 5` | 待验证 |
 | 2026-03-27 | 数据库锁与快照持久化 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml backtest --symbol AAPL --timeframe 1d --initial-equity 100000 --persist` | 通过 |
+| 2026-03-27 | 回测执行生命周期与重复执行保护 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
+| 2026-03-27 | 回测执行记录查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml executions --limit 5` | 通过 |
 
 ---
 
@@ -164,6 +167,7 @@
 | 2026-03-27 | 数据层先使用可切换后端设计 | 当前环境缺少 `duckdb` 依赖，但不能阻塞真实功能开发 | 先交付可运行数据链路，后续可无痛切回 DuckDB |
 | 2026-03-27 | 当前数据层正式切回 DuckDB | `duckdb` 已安装，可回到目标技术方案 | 数据底座与项目设计重新一致 |
 | 2026-03-27 | DuckDB 命令验证按顺序执行 | DuckDB 对同一数据库文件的并发锁更严格 | CLI 使用上避免并发导入与回测同库 |
+| 2026-03-27 | 持久化回测增加 execution lifecycle | 需要区分“运行中 / 完成 / 中断恢复”，并阻止同标的重复触发 | 为启动恢复和稳定性观测提供统一入口 |
 
 ---
 
@@ -190,7 +194,7 @@
 | P0 | 继续完善订单状态机 | 引入撤单、部分成交、重复下单保护 |
 | P0 | 开始 dashboard 历史页 | 使用已落库的 run/order/audit 数据 |
 | P0 | 继续完善订单状态机 | 引入撤单、部分成交、重复下单保护 |
-| P0 | 继续强化稳定性层 | 运行锁、启动恢复、重复执行保护 |
+| P0 | 继续强化稳定性层 | 启动恢复细化、失败重试、实盘级运行锁 |
 | P1 | 提升绩效指标丰富度 | 增加更多风险稳定性指标 |
 | P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
 
@@ -331,6 +335,17 @@
 | 结果 | 读取/写入更稳定，回测详情开始具备账户快照 |
 | 未完成 | 启动恢复、重复执行保护、实盘级运行锁 |
 | 备注 | 这是正式环境可用性里非常关键的一层地基 |
+
+### 2026-03-27 第 13 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 为持久化回测补上执行生命周期和同标的重复执行保护 |
+| 输入 | 已有数据库锁、回测持久化、历史查询能力 |
+| 产出 | `backtest_executions` 表、`executions` CLI、stale execution recovery、symbol/timeframe 运行锁 |
+| 结果 | 系统现在能区分 running/completed/abandoned，并在同标的重复触发时即时拒绝 |
+| 未完成 | 失败重试策略、恢复后自动续跑、实盘级运行状态机 |
+| 备注 | 这一步把“能落库”继续推进到“能管住运行过程本身” |
 
 ---
 

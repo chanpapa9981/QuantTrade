@@ -73,6 +73,22 @@ def create_schema(db_path: str) -> None:
                 unrealized_pnl REAL NOT NULL,
                 open_positions INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS backtest_executions (
+                execution_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                initial_equity REAL NOT NULL,
+                status TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                run_id TEXT,
+                error_message TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_backtest_executions_symbol_timeframe_status
+            ON backtest_executions(symbol, timeframe, status, started_at);
             """
         )
     finally:

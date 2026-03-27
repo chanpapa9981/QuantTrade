@@ -74,6 +74,99 @@ class BacktestRunRepository:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
 
+    def create_execution(self, symbol: str, timeframe: str, initial_equity: float) -> str:
+        connection = connect_database(self.db_path)
+        execution_id = str(uuid4())
+        started_at = datetime.now(UTC).isoformat()
+        try:
+            connection.execute(
+                """
+                INSERT INTO backtest_executions (
+                    execution_id, symbol, timeframe, initial_equity, status,
+                    requested_at, started_at, error_message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    execution_id,
+                    symbol,
+                    timeframe,
+                    initial_equity,
+                    "running",
+                    started_at,
+                    started_at,
+                    "",
+                ),
+            )
+            return execution_id
+        finally:
+            connection.close()
+
+    def mark_execution_completed(self, execution_id: str, run_id: str) -> None:
+        connection = connect_database(self.db_path)
+        finished_at = datetime.now(UTC).isoformat()
+        try:
+            connection.execute(
+                """
+                UPDATE backtest_executions
+                SET status = ?, finished_at = ?, run_id = ?, error_message = ''
+                WHERE execution_id = ?
+                """,
+                ("completed", finished_at, run_id, execution_id),
+            )
+        finally:
+            connection.close()
+
+    def mark_execution_failed(self, execution_id: str, error_message: str, status: str = "failed") -> None:
+        connection = connect_database(self.db_path)
+        finished_at = datetime.now(UTC).isoformat()
+        try:
+            connection.execute(
+                """
+                UPDATE backtest_executions
+                SET status = ?, finished_at = ?, error_message = ?
+                WHERE execution_id = ?
+                """,
+                (status, finished_at, error_message[:500], execution_id),
+            )
+        finally:
+            connection.close()
+
+    def recover_stale_executions(self, symbol: str, timeframe: str) -> int:
+        connection = connect_database(self.db_path)
+        finished_at = datetime.now(UTC).isoformat()
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "backtest_executions" for table in tables):
+                return 0
+            rows = connection.execute(
+                """
+                SELECT execution_id
+                FROM backtest_executions
+                WHERE symbol = ? AND timeframe = ? AND status = ?
+                """,
+                (symbol, timeframe, "running"),
+            ).fetchall()
+            if not rows:
+                return 0
+            connection.execute(
+                """
+                UPDATE backtest_executions
+                SET status = ?, finished_at = ?, error_message = ?
+                WHERE symbol = ? AND timeframe = ? AND status = ?
+                """,
+                (
+                    "abandoned",
+                    finished_at,
+                    "recovered after interrupted run",
+                    symbol,
+                    timeframe,
+                    "running",
+                ),
+            )
+            return len(rows)
+        finally:
+            connection.close()
+
     def save_run(self, symbol: str, timeframe: str, payload: dict[str, object]) -> str:
         connection = connect_database(self.db_path)
         run_id = str(uuid4())
@@ -205,6 +298,40 @@ class BacktestRunRepository:
                 "sharpe_ratio": row[8],
                 "sortino_ratio": row[9],
                 "total_trades": row[10],
+            }
+            for row in rows
+        ]
+
+    def fetch_recent_executions(self, limit: int = 10) -> list[dict[str, object]]:
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "backtest_executions" for table in tables):
+                return []
+            rows = connection.execute(
+                """
+                SELECT execution_id, symbol, timeframe, initial_equity, status,
+                       requested_at, started_at, finished_at, run_id, error_message
+                FROM backtest_executions
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            {
+                "execution_id": row[0],
+                "symbol": row[1],
+                "timeframe": row[2],
+                "initial_equity": row[3],
+                "status": row[4],
+                "requested_at": row[5],
+                "started_at": row[6],
+                "finished_at": row[7],
+                "run_id": row[8],
+                "error_message": row[9],
             }
             for row in rows
         ]
