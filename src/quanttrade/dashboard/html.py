@@ -566,6 +566,24 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       font-size: 13px;
       margin-bottom: 14px;
     }}
+    .toolbar {{
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }}
+    .toolbar label {{
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .toolbar select {{
+      background: var(--panel-alt);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+    }}
     .table-wrap {{
       overflow-x: auto;
     }}
@@ -631,6 +649,16 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         <section class="panel">
           <h2 class="panel-title">Order Lifecycles</h2>
           <div class="panel-note">Grouped order status paths keyed by order ID</div>
+          <div class="toolbar">
+            <label for="lifecycle-filter">Filter</label>
+            <select id="lifecycle-filter">
+              <option value="all">All</option>
+              <option value="filled">Filled</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="open">Open</option>
+              <option value="repriced">Repriced</option>
+            </select>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -738,8 +766,16 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </tr>
       `).join("");
     }}
+    function filteredLifecycles() {{
+      const mode = document.getElementById("lifecycle-filter").value;
+      if (mode === "all") return payload.order_lifecycles;
+      if (mode === "repriced") {{
+        return payload.order_lifecycles.filter(order => order.status_path.includes("replaced"));
+      }}
+      return payload.order_lifecycles.filter(order => order.final_status === mode);
+    }}
     function renderLifecycles() {{
-      document.getElementById("lifecycle-table").innerHTML = payload.order_lifecycles.map(order => `
+      document.getElementById("lifecycle-table").innerHTML = filteredLifecycles().map(order => `
         <tr>
           <td>${{order.order_id}}</td>
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
@@ -765,6 +801,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     renderLifecycles();
     renderOrders();
     renderAudit();
+    document.getElementById("lifecycle-filter").addEventListener("change", renderLifecycles);
   </script>
 </body>
 </html>

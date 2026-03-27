@@ -86,6 +86,7 @@
 | W-034 | 数据层 | 增加订单生命周期明细查询 | 按 `order_id` 汇总状态路径并查询完整订单事件流 | 已完成 |
 | W-035 | Dashboard | 在历史页展示订单生命周期摘要 | 把 `order_id`、final status、status path 直接显示在历史 HTML 中 | 已完成 |
 | W-036 | Dashboard | 增加历史页订单生命周期统计卡片 | 展示 lifecycle filled/cancelled/repriced 等摘要数量 | 已完成 |
+| W-037 | Dashboard | 增加历史页生命周期状态筛选 | 支持按 all/filled/cancelled/open/repriced 过滤生命周期表 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -167,6 +168,7 @@
 | 2026-03-27 | 订单生命周期明细查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml order-detail --order-id <order_id>` | 通过 |
 | 2026-03-27 | 历史页订单生命周期展示 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
 | 2026-03-27 | 历史页生命周期统计卡片 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
+| 2026-03-27 | 历史页生命周期状态筛选 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
 
 ---
 
@@ -188,6 +190,7 @@
 | 2026-03-27 | 订单分析默认提升到 order lifecycle 视角 | 仅靠 event list 不利于定位单笔订单最终发生了什么 | 查询层开始同时提供原始事件流和归并后的状态路径摘要 |
 | 2026-03-27 | 历史 dashboard 优先展示 order lifecycle 而不只展示 event stream | 研究和排错更关心“订单最终经历了什么”而不是只看孤立事件 | 历史页信息密度更高，也更适合后续接实盘订单排查 |
 | 2026-03-27 | 历史 dashboard 增加 lifecycle 聚合卡片 | 长表格之外需要一眼看出订单状态分布，方便快速复盘 | 历史页开始兼顾总览和明细两种阅读方式 |
+| 2026-03-27 | 历史页筛选先做前端静态过滤 | 当前页面是静态 HTML，前端内筛选比新增后端接口更轻量且足够解决大部分复盘需求 | 不改数据接口也能提升历史页可用性 |
 
 ---
 
@@ -218,7 +221,7 @@
 | P1 | 提升绩效指标丰富度 | 增加更多风险稳定性指标 |
 | P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
 | P1 | 增加 order lifecycle 历史页组件 | 增加状态筛选、按 run/order 跳转、更多摘要字段 |
-| P1 | 增加历史页生命周期筛选交互 | 支持只看 cancelled/open/repriced 等订单 |
+| P1 | 增加历史页生命周期筛选交互 | 增加按 run/order 跳转和多条件组合筛选 |
 
 ---
 
@@ -434,6 +437,17 @@
 | 结果 | 历史 dashboard 现在既能做订单级细读，也能做状态分布级快速浏览 |
 | 未完成 | 生命周期状态筛选、点击单笔订单查看 detail、更多统计口径 |
 | 备注 | 这一步是在把订单历史页从“表格展示”推进到“研究/运维面板” |
+
+### 2026-03-27 第 20 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让历史页里的订单生命周期表具备基础筛选能力 |
+| 输入 | 已有 lifecycle 表格和状态统计卡片 |
+| 产出 | `all / filled / cancelled / open / repriced` 前端筛选下拉框 |
+| 结果 | 历史 HTML 现在能更快聚焦异常订单，而不需要手动在表格里查找 |
+| 未完成 | 按 run/order 跳转、多条件筛选、详情联动 |
+| 备注 | 这是静态 dashboard 走向“轻交互研究面板”的小一步 |
 
 ---
 
