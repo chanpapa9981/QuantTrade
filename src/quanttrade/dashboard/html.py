@@ -701,8 +701,15 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <option value="open">Open</option>
               <option value="repriced">Repriced</option>
             </select>
+            <label for="side-filter">Side</label>
+            <select id="side-filter">
+              <option value="all">All sides</option>
+              <option value="BUY">Buy</option>
+              <option value="SELL">Sell</option>
+            </select>
             <div class="toolbar-actions">
               <button id="clear-context" class="ghost-button" type="button">Clear Context</button>
+              <button id="copy-link" class="ghost-button" type="button">Copy Link</button>
               <a id="deep-link" class="deep-link" href="#">Deep Link</a>
             </div>
           </div>
@@ -814,10 +821,12 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
       const runId = params.get("run") || "all";
       const lifecycleFilter = params.get("filter") || "all";
+      const side = params.get("side") || "all";
       const orderId = params.get("order") || "";
       return {{
         runId: availableRunIds().includes(runId) ? runId : "all",
         lifecycleFilter: ["all", "filled", "cancelled", "open", "repriced"].includes(lifecycleFilter) ? lifecycleFilter : "all",
+        side: ["all", "BUY", "SELL"].includes(side) ? side : "all",
         orderId,
       }};
     }}
@@ -826,6 +835,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const params = new URLSearchParams();
       if (state.runId !== "all") params.set("run", state.runId);
       if (state.lifecycleFilter !== "all") params.set("filter", state.lifecycleFilter);
+      if (state.side !== "all") params.set("side", state.side);
       if (state.orderId) params.set("order", state.orderId);
       const hash = params.toString() ? `#${{params.toString()}}` : "";
       const target = `${{window.location.pathname}}${{window.location.search}}${{hash}}`;
@@ -837,11 +847,17 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     function syncControlsToState() {{
       document.getElementById("run-filter").value = state.runId;
       document.getElementById("lifecycle-filter").value = state.lifecycleFilter;
+      document.getElementById("side-filter").value = state.side;
+    }}
+    function filteredLifecycleCount() {{
+      return filteredLifecycles().length;
     }}
     function renderContext() {{
       const bits = [];
       bits.push(state.runId === "all" ? "Run: all" : `Run: ${{state.runId}}`);
       bits.push(`Status: ${{state.lifecycleFilter}}`);
+      bits.push(`Side: ${{state.side === "all" ? "all" : state.side}}`);
+      bits.push(`Matches: ${{filteredLifecycleCount()}}`);
       bits.push(state.orderId ? `Order: ${{state.orderId}}` : "Order: none selected");
       document.getElementById("selected-context").textContent = bits.join(" | ");
     }}
@@ -884,7 +900,11 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       }});
     }}
     function renderOrders() {{
-      const rows = payload.recent_orders.filter(order => state.runId === "all" || order.run_id === state.runId);
+      const rows = payload.recent_orders.filter(order => {{
+        if (state.runId !== "all" && order.run_id !== state.runId) return false;
+        if (state.side !== "all" && order.side !== state.side) return false;
+        return true;
+      }});
       document.getElementById("orders-table").innerHTML = rows.map(order => `
         <tr class="${{state.orderId === order.order_id ? "row-active" : ""}}">
           <td><button class="link-button" data-order-id="${{order.order_id}}">${{order.order_id}}</button></td>
@@ -910,7 +930,11 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       }});
     }}
     function filteredLifecycles() {{
-      const scoped = payload.order_lifecycles.filter(order => state.runId === "all" || order.run_id === state.runId);
+      const scoped = payload.order_lifecycles.filter(order => {{
+        if (state.runId !== "all" && order.run_id !== state.runId) return false;
+        if (state.side !== "all" && order.side !== state.side) return false;
+        return true;
+      }});
       if (state.lifecycleFilter === "all") return scoped;
       if (state.lifecycleFilter === "repriced") {{
         return scoped.filter(order => order.status_path.includes("replaced"));
@@ -976,6 +1000,24 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </tr>
       `).join("");
     }}
+    async function copyCurrentLink() {{
+      const button = document.getElementById("copy-link");
+      const originalLabel = button.textContent;
+      try {{
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+          await navigator.clipboard.writeText(window.location.href);
+        }} else {{
+          window.prompt("Copy link:", window.location.href);
+        }}
+        button.textContent = "Copied";
+      }} catch (error) {{
+        window.prompt("Copy link:", window.location.href);
+        button.textContent = "Link Ready";
+      }}
+      window.setTimeout(() => {{
+        button.textContent = originalLabel;
+      }}, 1400);
+    }}
     function renderAll() {{
       syncControlsToState();
       renderContext();
@@ -996,16 +1038,23 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.lifecycleFilter = event.target.value || "all";
       renderAll();
     }});
+    document.getElementById("side-filter").addEventListener("change", event => {{
+      state.side = event.target.value || "all";
+      renderAll();
+    }});
     document.getElementById("clear-context").addEventListener("click", () => {{
       state.runId = "all";
       state.lifecycleFilter = "all";
+      state.side = "all";
       state.orderId = "";
       renderAll();
     }});
+    document.getElementById("copy-link").addEventListener("click", copyCurrentLink);
     window.addEventListener("hashchange", () => {{
       const next = readHashState();
       state.runId = next.runId;
       state.lifecycleFilter = next.lifecycleFilter;
+      state.side = next.side;
       state.orderId = next.orderId;
       renderAll();
     }});
