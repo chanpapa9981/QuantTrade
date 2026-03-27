@@ -122,6 +122,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("run_id", persist_result)
         self.assertIn("execution_id", persist_result)
         self.assertEqual(persist_result["recovered_executions"], 0)
+        self.assertEqual(persist_result["execution"]["attempt_number"], 1)
+        self.assertEqual(persist_result["execution"]["recovered_execution_count"], 0)
+        self.assertEqual(persist_result["execution"]["consecutive_failures_before_start"], 0)
+        self.assertFalse(persist_result["execution"]["protection_mode"])
         self.assertGreaterEqual(len(recent_runs["runs"]), 1)
         self.assertGreaterEqual(len(recent_executions["executions"]), 1)
         self.assertEqual(recent_executions["executions"][0]["status"], "completed")
@@ -183,7 +187,38 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
 
         self.assertEqual(persist_result["recovered_executions"], 1)
         self.assertEqual(recent_executions["executions"][0]["status"], "completed")
+        self.assertEqual(recent_executions["executions"][0]["attempt_number"], 2)
+        self.assertEqual(recent_executions["executions"][0]["recovered_execution_count"], 1)
         self.assertEqual(recent_executions["executions"][1]["status"], "abandoned")
+
+    def test_execution_enters_protection_mode_after_consecutive_failures(self) -> None:
+        """验证连续失败达到阈值后，新执行记录会带上保护模式标记。"""
+        base_dir = Path("var/test-artifacts/execution-protection")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "protection-test.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        self._write_config(config_path, db_path)
+        app = QuantTradeApp(str(config_path))
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            first = repository.create_execution(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+            repository.mark_execution_failed(first, "first failure")
+            second = repository.create_execution(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+            repository.mark_execution_failed(second, "second failure")
+            third = repository.create_execution(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+            repository.mark_execution_failed(third, "third failure")
+
+        recent_executions = app.recent_backtest_executions(limit=5)
+
+        self.assertEqual(recent_executions["executions"][0]["attempt_number"], 3)
+        self.assertEqual(recent_executions["executions"][0]["consecutive_failures_before_start"], 2)
+        self.assertTrue(recent_executions["executions"][0]["protection_mode"])
+        self.assertIn("protection mode", recent_executions["executions"][0]["protection_reason"])
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""

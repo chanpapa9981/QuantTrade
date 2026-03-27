@@ -88,6 +88,11 @@ def create_schema(db_path: str) -> None:
                 symbol TEXT NOT NULL,
                 timeframe TEXT NOT NULL,
                 initial_equity REAL NOT NULL,
+                attempt_number INTEGER NOT NULL DEFAULT 1,
+                recovered_execution_count INTEGER NOT NULL DEFAULT 0,
+                consecutive_failures_before_start INTEGER NOT NULL DEFAULT 0,
+                protection_mode INTEGER NOT NULL DEFAULT 0,
+                protection_reason TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL,
                 requested_at TEXT NOT NULL,
                 started_at TEXT NOT NULL,
@@ -106,5 +111,10 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS remaining_quantity INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS broker_status TEXT DEFAULT '';")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS status_detail TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS attempt_number INTEGER DEFAULT 1;")
+        connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS recovered_execution_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS consecutive_failures_before_start INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS protection_mode INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS protection_reason TEXT DEFAULT '';")
     finally:
         connection.close()

@@ -141,6 +141,7 @@ class QuantTradeApp:
                     symbol=symbol,
                     timeframe=timeframe,
                     initial_equity=initial_equity,
+                    recovered_execution_count=recovered_executions,
                 )
                 bar_repository = BarRepository(self.settings.data.duckdb_path)
                 bars = bar_repository.fetch_bars(symbol=symbol, timeframe=timeframe)
@@ -170,6 +171,7 @@ class QuantTradeApp:
             "bars_processed": payload["bars_processed"],
             "metrics": payload["metrics"],
             "recovered_executions": recovered_executions,
+            "execution": self.recent_backtest_executions(limit=1)["executions"][0],
         }
 
     def recent_backtest_runs(self, limit: int = 10) -> dict[str, object]:

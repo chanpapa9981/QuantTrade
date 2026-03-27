@@ -85,24 +85,77 @@ class BacktestRunRepository:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
 
-    def create_execution(self, symbol: str, timeframe: str, initial_equity: float) -> str:
+    def _recent_statuses(self, connection: object, symbol: str, timeframe: str, limit: int = 20) -> list[str]:
+        """读取同标的同周期最近的执行状态，用于判断是否出现连续失败。"""
+        rows = connection.execute(
+            """
+            SELECT status
+            FROM backtest_executions
+            WHERE symbol = ? AND timeframe = ?
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (symbol, timeframe, limit),
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def _consecutive_failure_count(self, connection: object, symbol: str, timeframe: str) -> int:
+        """统计最近连续失败/中断的次数，直到遇到一次 completed 为止。"""
+        count = 0
+        for status in self._recent_statuses(connection, symbol, timeframe):
+            if status == "completed":
+                break
+            if status in {"failed", "abandoned"}:
+                count += 1
+        return count
+
+    def create_execution(
+        self,
+        symbol: str,
+        timeframe: str,
+        initial_equity: float,
+        recovered_execution_count: int = 0,
+    ) -> str:
         """创建一条新的回测执行记录。"""
         connection = connect_database(self.db_path)
         execution_id = str(uuid4())
         started_at = datetime.now(UTC).isoformat()
         try:
+            attempt_row = connection.execute(
+                """
+                SELECT COALESCE(MAX(attempt_number), 0)
+                FROM backtest_executions
+                WHERE symbol = ? AND timeframe = ?
+                """,
+                (symbol, timeframe),
+            ).fetchone()
+            attempt_number = int(attempt_row[0]) + 1 if attempt_row else 1
+            consecutive_failures = self._consecutive_failure_count(connection, symbol, timeframe)
+            protection_mode = 1 if consecutive_failures >= 2 else 0
+            protection_reason = (
+                "entered protection mode after multiple consecutive failed executions"
+                if protection_mode
+                else ""
+            )
             connection.execute(
                 """
                 INSERT INTO backtest_executions (
-                    execution_id, symbol, timeframe, initial_equity, status,
+                    execution_id, symbol, timeframe, initial_equity, attempt_number,
+                    recovered_execution_count, consecutive_failures_before_start,
+                    protection_mode, protection_reason, status,
                     requested_at, started_at, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     execution_id,
                     symbol,
                     timeframe,
                     initial_equity,
+                    attempt_number,
+                    recovered_execution_count,
+                    consecutive_failures,
+                    protection_mode,
+                    protection_reason,
                     "running",
                     started_at,
                     started_at,
@@ -336,7 +389,9 @@ class BacktestRunRepository:
                 return []
             rows = connection.execute(
                 """
-                SELECT execution_id, symbol, timeframe, initial_equity, status,
+                SELECT execution_id, symbol, timeframe, initial_equity, attempt_number,
+                       recovered_execution_count, consecutive_failures_before_start,
+                       protection_mode, protection_reason, status,
                        requested_at, started_at, finished_at, run_id, error_message
                 FROM backtest_executions
                 ORDER BY started_at DESC
@@ -352,12 +407,17 @@ class BacktestRunRepository:
                 "symbol": row[1],
                 "timeframe": row[2],
                 "initial_equity": row[3],
-                "status": row[4],
-                "requested_at": row[5],
-                "started_at": row[6],
-                "finished_at": row[7],
-                "run_id": row[8],
-                "error_message": row[9],
+                "attempt_number": row[4],
+                "recovered_execution_count": row[5],
+                "consecutive_failures_before_start": row[6],
+                "protection_mode": bool(row[7]),
+                "protection_reason": row[8],
+                "status": row[9],
+                "requested_at": row[10],
+                "started_at": row[11],
+                "finished_at": row[12],
+                "run_id": row[13],
+                "error_message": row[14],
             }
             for row in rows
         ]
