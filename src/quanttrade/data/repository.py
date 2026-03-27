@@ -152,6 +152,23 @@ class BacktestRunRepository:
                         for event in audit_log
                     ],
                 )
+            account = payload["account"]
+            connection.execute(
+                """
+                INSERT INTO account_snapshots (
+                    run_id, recorded_at, cash, equity, realized_pnl, unrealized_pnl, open_positions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    started_at,
+                    account["cash"],
+                    account["equity"],
+                    account["realized_pnl"],
+                    account["unrealized_pnl"],
+                    account["open_positions"],
+                ),
+            )
             return run_id
         finally:
             connection.close()
@@ -230,6 +247,16 @@ class BacktestRunRepository:
                 """,
                 (run_id,),
             ).fetchall()
+            snapshot_row = connection.execute(
+                """
+                SELECT recorded_at, cash, equity, realized_pnl, unrealized_pnl, open_positions
+                FROM account_snapshots
+                WHERE run_id = ?
+                ORDER BY recorded_at DESC
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
         finally:
             connection.close()
 
@@ -276,6 +303,23 @@ class BacktestRunRepository:
                 }
                 for row in audit_rows
             ],
+            "account_snapshot": {
+                "recorded_at": snapshot_row[0],
+                "cash": snapshot_row[1],
+                "equity": snapshot_row[2],
+                "realized_pnl": snapshot_row[3],
+                "unrealized_pnl": snapshot_row[4],
+                "open_positions": snapshot_row[5],
+            }
+            if snapshot_row
+            else {
+                "recorded_at": run_row[3],
+                "cash": run_row[5],
+                "equity": run_row[5],
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "open_positions": 0,
+            },
         }
 
     def fetch_recent_order_events(self, limit: int = 20) -> list[dict[str, object]]:

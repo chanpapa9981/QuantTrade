@@ -78,6 +78,7 @@
 | W-026 | 数据层 | 持久化回测运行结果 | 落库存储回测、订单、审计事件 | 已完成 |
 | W-027 | 数据层 | 增加运行历史查询接口 | 查询 run detail、order events、audit events | 已完成 |
 | W-028 | Dashboard | 增加历史视图静态页面 | 把 persisted runs/order/audit 生成 HTML | 已完成 |
+| W-029 | 稳定性 | 增加数据库文件锁与账户快照落库 | 降低 DuckDB 锁冲突并提升追溯性 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -148,6 +149,7 @@
 | 2026-03-27 | 回测运行记录查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml runs --limit 5` | 通过 |
 | 2026-03-27 | 历史摘要查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history --runs-limit 5 --events-limit 5` | 通过 |
 | 2026-03-27 | 历史 HTML 导出 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 5` | 待验证 |
+| 2026-03-27 | 数据库锁与快照持久化 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml backtest --symbol AAPL --timeframe 1d --initial-equity 100000 --persist` | 通过 |
 
 ---
 
@@ -188,6 +190,7 @@
 | P0 | 继续完善订单状态机 | 引入撤单、部分成交、重复下单保护 |
 | P0 | 开始 dashboard 历史页 | 使用已落库的 run/order/audit 数据 |
 | P0 | 继续完善订单状态机 | 引入撤单、部分成交、重复下单保护 |
+| P0 | 继续强化稳定性层 | 运行锁、启动恢复、重复执行保护 |
 | P1 | 提升绩效指标丰富度 | 增加更多风险稳定性指标 |
 | P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
 
@@ -317,6 +320,17 @@
 | 结果 | 研究端开始拥有“当前报告页 + 历史报告页”双页面结构 |
 | 未完成 | 交互式历史筛选、运行对比、更多页面组件 |
 | 备注 | 这一步把 dashboard 从单次回测展示推进到“多运行历史展示” |
+
+### 2026-03-27 第 12 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 降低 DuckDB 锁冲突，并增强运行结果追溯能力 |
+| 输入 | 已有回测持久化和历史查询能力 |
+| 产出 | 跨进程数据库锁、`account_snapshots` 表、旧 run 兼容快照回退 |
+| 结果 | 读取/写入更稳定，回测详情开始具备账户快照 |
+| 未完成 | 启动恢复、重复执行保护、实盘级运行锁 |
+| 备注 | 这是正式环境可用性里非常关键的一层地基 |
 
 ---
 

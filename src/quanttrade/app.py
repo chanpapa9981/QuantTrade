@@ -13,7 +13,7 @@ from quanttrade.dashboard.html import render_dashboard_html, render_history_html
 from quanttrade.data.importer import import_bars_from_csv
 from quanttrade.data.repository import BacktestRunRepository, BarRepository
 from quanttrade.data.schema import create_schema
-from quanttrade.data.storage import ensure_data_dirs
+from quanttrade.data.storage import database_lock, ensure_data_dirs
 from quanttrade.execution.simulator import SimulatedExecutionEngine
 from quanttrade.risk.engine import RiskEngine
 from quanttrade.strategies.atr_dtf import AtrDynamicTrendFollowingStrategy
@@ -59,13 +59,14 @@ class QuantTradeApp:
         return asdict(result)
 
     def import_csv(self, csv_path: str, symbol: str, timeframe: str = "1d") -> dict[str, object]:
-        create_schema(self.settings.data.duckdb_path)
-        inserted = import_bars_from_csv(
-            csv_path=csv_path,
-            db_path=self.settings.data.duckdb_path,
-            symbol=symbol,
-            timeframe=timeframe,
-        )
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            inserted = import_bars_from_csv(
+                csv_path=csv_path,
+                db_path=self.settings.data.duckdb_path,
+                symbol=symbol,
+                timeframe=timeframe,
+            )
         return {
             "symbol": symbol,
             "timeframe": timeframe,
@@ -74,8 +75,9 @@ class QuantTradeApp:
         }
 
     def backtest_symbol(self, symbol: str, timeframe: str = "1d", initial_equity: float = 100_000.0) -> dict[str, object]:
-        repository = BarRepository(self.settings.data.duckdb_path)
-        bars = repository.fetch_bars(symbol=symbol, timeframe=timeframe)
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BarRepository(self.settings.data.duckdb_path)
+            bars = repository.fetch_bars(symbol=symbol, timeframe=timeframe)
         strategy_config = self.settings.strategy
         strategy_config.symbol = symbol
         strategy = AtrDynamicTrendFollowingStrategy(strategy_config)
@@ -91,10 +93,19 @@ class QuantTradeApp:
         timeframe: str = "1d",
         initial_equity: float = 100_000.0,
     ) -> dict[str, object]:
-        create_schema(self.settings.data.duckdb_path)
-        payload = self.backtest_symbol(symbol=symbol, timeframe=timeframe, initial_equity=initial_equity)
-        repository = BacktestRunRepository(self.settings.data.duckdb_path)
-        run_id = repository.save_run(symbol=symbol, timeframe=timeframe, payload=payload)
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BarRepository(self.settings.data.duckdb_path)
+            bars = repository.fetch_bars(symbol=symbol, timeframe=timeframe)
+            strategy_config = self.settings.strategy
+            strategy_config.symbol = symbol
+            strategy = AtrDynamicTrendFollowingStrategy(strategy_config)
+            risk_engine = RiskEngine(self.settings.risk)
+            execution_engine = SimulatedExecutionEngine(self.settings.execution)
+            engine = BacktestEngine(strategy, risk_engine, execution_engine)
+            payload = asdict(engine.run_series(bars=bars, initial_equity=initial_equity))
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            run_id = repository.save_run(symbol=symbol, timeframe=timeframe, payload=payload)
         return {
             "run_id": run_id,
             "symbol": symbol,
@@ -104,26 +115,31 @@ class QuantTradeApp:
         }
 
     def recent_backtest_runs(self, limit: int = 10) -> dict[str, object]:
-        repository = BacktestRunRepository(self.settings.data.duckdb_path)
-        return {"runs": repository.fetch_recent_runs(limit=limit)}
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"runs": repository.fetch_recent_runs(limit=limit)}
 
     def backtest_run_detail(self, run_id: str) -> dict[str, object]:
-        repository = BacktestRunRepository(self.settings.data.duckdb_path)
-        detail = repository.fetch_run_detail(run_id)
-        return {"detail": detail}
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            detail = repository.fetch_run_detail(run_id)
+            return {"detail": detail}
 
     def recent_order_events(self, limit: int = 20) -> dict[str, object]:
-        repository = BacktestRunRepository(self.settings.data.duckdb_path)
-        return {"orders": repository.fetch_recent_order_events(limit=limit)}
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"orders": repository.fetch_recent_order_events(limit=limit)}
 
     def recent_audit_events(self, limit: int = 20) -> dict[str, object]:
-        repository = BacktestRunRepository(self.settings.data.duckdb_path)
-        return {"audit_events": repository.fetch_recent_audit_events(limit=limit)}
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"audit_events": repository.fetch_recent_audit_events(limit=limit)}
 
     def dashboard_history(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, object]:
-        repository = BacktestRunRepository(self.settings.data.duckdb_path)
-        bundle = repository.fetch_history_bundle(runs_limit=runs_limit, events_limit=events_limit)
-        return build_history_payload(bundle["runs"], bundle["orders"], bundle["audit_events"])
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            bundle = repository.fetch_history_bundle(runs_limit=runs_limit, events_limit=events_limit)
+            return build_history_payload(bundle["runs"], bundle["orders"], bundle["audit_events"])
 
     def export_backtest(
         self,

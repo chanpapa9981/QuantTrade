@@ -96,6 +96,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("run_id", persist_result)
         self.assertGreaterEqual(len(recent_runs["runs"]), 1)
         self.assertIsNotNone(run_detail["detail"])
+        self.assertIn("account_snapshot", run_detail["detail"])
         self.assertGreaterEqual(len(recent_orders["orders"]), 1)
         self.assertGreaterEqual(len(recent_audit["audit_events"]), 1)
         self.assertIn("history_summary", history_payload)

@@ -63,6 +63,16 @@ def create_schema(db_path: str) -> None:
                 reason TEXT NOT NULL,
                 risk_allowed INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS account_snapshots (
+                run_id TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                cash REAL NOT NULL,
+                equity REAL NOT NULL,
+                realized_pnl REAL NOT NULL,
+                unrealized_pnl REAL NOT NULL,
+                open_positions INTEGER NOT NULL
+            );
             """
         )
     finally:
