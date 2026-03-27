@@ -746,6 +746,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Run ID</th>
                   <th>Side</th>
                   <th>Final</th>
+                  <th>Broker</th>
                   <th>Req Qty</th>
                   <th>Filled</th>
                   <th>Path</th>
@@ -767,6 +768,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Order ID</th>
                   <th>Time</th>
                   <th>Status</th>
+                  <th>Broker</th>
+                  <th>Detail</th>
                   <th>Req Qty</th>
                   <th>Filled</th>
                   <th>Remaining</th>
@@ -789,6 +792,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Time</th>
                   <th>Side</th>
                   <th>Status</th>
+                  <th>Broker</th>
+                  <th>Detail</th>
                   <th>Req Qty</th>
                   <th>Filled</th>
                   <th>Remaining</th>
@@ -954,6 +959,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{order.timestamp}}</td>
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
           <td>${{order.status}}</td>
+          <td>${{order.broker_status || ""}}</td>
+          <td>${{order.status_detail || ""}}</td>
           <td>${{fmt(order.quantity)}}</td>
           <td>${{fmt(order.filled_quantity ?? 0)}}</td>
           <td>${{fmt(order.remaining_quantity ?? 0)}}</td>
@@ -997,6 +1004,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td><button class="link-button" data-run-id="${{order.run_id}}">${{order.run_id}}</button></td>
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
           <td>${{order.final_status}}</td>
+          <td>${{order.latest_broker_status || ""}}</td>
           <td>${{fmt(order.requested_quantity)}}</td>
           <td>${{fmt(order.filled_quantity)}}</td>
           <td>${{order.status_path}}</td>
@@ -1021,13 +1029,15 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const events = payload.order_lifecycle_details[state.orderId] || [];
       const lifecycle = findLifecycle(state.orderId);
       document.getElementById("lifecycle-detail-meta").textContent = lifecycle
-        ? `Order ${{lifecycle.order_id}} | Run: ${{lifecycle.run_id}} | Final: ${{lifecycle.final_status}} | Path: ${{lifecycle.status_path}}`
+        ? `Order ${{lifecycle.order_id}} | Run: ${{lifecycle.run_id}} | Final: ${{lifecycle.final_status}} | Broker: ${{lifecycle.latest_broker_status || ""}} | Path: ${{lifecycle.status_path}}`
         : "No order selected.";
       document.getElementById("lifecycle-detail-table").innerHTML = events.map(event => `
         <tr>
           <td>${{event.order_id}}</td>
           <td>${{event.timestamp}}</td>
           <td>${{event.status}}</td>
+          <td>${{event.broker_status || ""}}</td>
+          <td>${{event.status_detail || ""}}</td>
           <td>${{fmt(event.quantity)}}</td>
           <td>${{fmt(event.filled_quantity ?? 0)}}</td>
           <td>${{fmt(event.remaining_quantity ?? 0)}}</td>

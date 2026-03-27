@@ -23,6 +23,7 @@ def _build_order_lifecycles(orders: list[dict[str, object]]) -> list[dict[str, o
         first = events[-1]
         last = events[0]
         status_path = [str(event.get("status", "")) for event in reversed(events)]
+        broker_status_path = [str(event.get("broker_status", "")) for event in reversed(events)]
         lifecycles.append(
             {
                 "order_id": order_id,
@@ -31,7 +32,10 @@ def _build_order_lifecycles(orders: list[dict[str, object]]) -> list[dict[str, o
                 "submitted_at": first.get("timestamp", ""),
                 "last_updated_at": last.get("timestamp", ""),
                 "final_status": last.get("status", ""),
+                "latest_broker_status": last.get("broker_status", ""),
+                "latest_status_detail": last.get("status_detail", ""),
                 "status_path": " -> ".join(status_path),
+                "broker_status_path": " -> ".join(broker_status_path),
                 "requested_quantity": first.get("quantity", 0),
                 "filled_quantity": max(int(event.get("filled_quantity", 0)) for event in events),
                 "remaining_quantity": last.get("remaining_quantity", 0),

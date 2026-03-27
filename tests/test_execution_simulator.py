@@ -45,6 +45,8 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(len(result.fill_events), 1)
         self.assertEqual(len(result.order_events), 1)
         self.assertEqual(result.order_events[0].status.value, "partially_filled")
+        self.assertEqual(result.order_events[0].broker_status, "partially_filled")
+        self.assertEqual(result.order_events[0].status_detail, "entry_partial_fill_waiting")
         self.assertEqual(result.order_events[0].filled_quantity, 10)
         self.assertEqual(result.order_events[0].remaining_quantity, 15)
 
@@ -69,6 +71,8 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertEqual(len(result.order_events), 1)
         self.assertEqual(result.order_events[0].status.value, "rejected")
+        self.assertEqual(result.order_events[0].broker_status, "rejected")
+        self.assertEqual(result.order_events[0].status_detail, "duplicate_position_guard")
         self.assertIn("duplicate", result.order_events[0].reason)
 
     def test_partial_exit_reduces_position_and_cancels_remainder(self) -> None:
@@ -92,6 +96,8 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(len(result.fill_events), 1)
         self.assertEqual(result.fill_events[0].quantity, 5)
         self.assertEqual(result.order_events[0].status.value, "partially_filled")
+        self.assertEqual(result.order_events[0].broker_status, "partially_filled")
+        self.assertEqual(result.order_events[0].status_detail, "exit_partial_fill_waiting")
         self.assertEqual(result.order_events[0].filled_quantity, 5)
         self.assertEqual(result.order_events[0].remaining_quantity, 7)
 
@@ -117,6 +123,8 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(len(result.fill_events), 0)
         self.assertEqual(len(result.order_events), 1)
         self.assertEqual(result.order_events[0].status.value, "open")
+        self.assertEqual(result.order_events[0].broker_status, "working")
+        self.assertEqual(result.order_events[0].status_detail, "awaiting_entry_liquidity")
         self.assertEqual(result.order_events[0].remaining_quantity, 12)
 
 

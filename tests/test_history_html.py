@@ -69,6 +69,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Lifecycle Filled", html)
         self.assertIn("Recent Runs", html)
         self.assertIn("Order Lifecycles", html)
+        self.assertIn("Broker", html)
         self.assertIn("Lifecycle Detail", html)
         self.assertIn("lifecycle-filter", html)
         self.assertIn("run-filter", html)

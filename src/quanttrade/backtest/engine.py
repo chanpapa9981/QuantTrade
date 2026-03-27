@@ -145,6 +145,8 @@ class BacktestEngine:
                         requested_price=bar.close,
                         filled_quantity=0,
                         remaining_quantity=pending_order.remaining_quantity,
+                        broker_status="cancelled",
+                        status_detail="timeout_cancelled",
                         reason="order cancelled after timeout waiting across bars",
                     )
                     orders.append(self._serialize_order_event(cancel_event))
@@ -176,6 +178,8 @@ class BacktestEngine:
                         requested_price=bar.close,
                         filled_quantity=0,
                         remaining_quantity=pending_order.remaining_quantity,
+                        broker_status="replaced",
+                        status_detail="repriced_to_bar_close",
                         reason="order repriced to current bar close while waiting for liquidity",
                     )
                     orders.append(self._serialize_order_event(replace_event))
@@ -246,6 +250,8 @@ class BacktestEngine:
                             "quantity": decision.quantity,
                             "filled_quantity": 0,
                             "remaining_quantity": decision.quantity,
+                            "broker_status": "local_skipped",
+                            "status_detail": "risk_check_blocked",
                             "requested_price": round(bar.close, 4),
                             "fill_price": 0.0,
                             "commission": 0.0,
@@ -288,6 +294,8 @@ class BacktestEngine:
                 requested_price=bar.close,
                 filled_quantity=0,
                 remaining_quantity=decision.quantity if decision.signal == SignalType.LONG_ENTRY else position_state.quantity,
+                broker_status="pending_new",
+                status_detail="initial_submit",
                 reason=decision.reason,
             )
             orders.append(self._serialize_order_event(created_event))
@@ -350,6 +358,8 @@ class BacktestEngine:
                 requested_price=final_bar.close,
                 filled_quantity=0,
                 remaining_quantity=pending_order.remaining_quantity,
+                broker_status="cancelled",
+                status_detail="backtest_ended_with_open_order",
                 reason="backtest ended with open order",
             )
             orders.append(self._serialize_order_event(cancel_event))
@@ -383,6 +393,8 @@ class BacktestEngine:
                         requested_price=final_bar.close,
                         filled_quantity=0,
                         remaining_quantity=position_state.quantity,
+                        broker_status="pending_new",
+                        status_detail="forced_close_submit",
                         reason=decision.reason,
                     )
                 )
@@ -503,6 +515,8 @@ class BacktestEngine:
             "quantity": event.quantity,
             "filled_quantity": event.filled_quantity,
             "remaining_quantity": event.remaining_quantity,
+            "broker_status": event.broker_status,
+            "status_detail": event.status_detail,
             "requested_price": round(event.requested_price, 4),
             "fill_price": round(event.fill_price, 4),
             "commission": round(event.commission, 4),

@@ -179,6 +179,8 @@ class OrderEvent:
     requested_price: float
     filled_quantity: int = 0
     remaining_quantity: int = 0
+    broker_status: str = ""
+    status_detail: str = ""
     fill_price: float = 0.0
     commission: float = 0.0
     gross_value: float = 0.0

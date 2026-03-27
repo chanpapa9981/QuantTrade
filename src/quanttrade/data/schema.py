@@ -54,6 +54,8 @@ def create_schema(db_path: str) -> None:
                 quantity INTEGER NOT NULL,
                 filled_quantity INTEGER NOT NULL DEFAULT 0,
                 remaining_quantity INTEGER NOT NULL DEFAULT 0,
+                broker_status TEXT NOT NULL DEFAULT '',
+                status_detail TEXT NOT NULL DEFAULT '',
                 requested_price REAL NOT NULL,
                 fill_price REAL NOT NULL,
                 commission REAL NOT NULL,
@@ -102,5 +104,7 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS order_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS filled_quantity INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS remaining_quantity INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS broker_status TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS status_detail TEXT DEFAULT '';")
     finally:
         connection.close()

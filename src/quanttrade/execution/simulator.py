@@ -58,6 +58,60 @@ class SimulatedExecutionEngine:
         """估算单根 bar 最多允许成交多少股。"""
         return max(int(market_volume * self.config.max_fill_ratio_per_bar), 0)
 
+    @staticmethod
+    def _broker_status_for(status: OrderStatus) -> str:
+        """把内部订单状态映射成更接近券商接口语义的状态字符串。"""
+        mapping = {
+            OrderStatus.CREATED: "pending_new",
+            OrderStatus.OPEN: "working",
+            OrderStatus.REPLACED: "replaced",
+            OrderStatus.FILLED: "filled",
+            OrderStatus.PARTIALLY_FILLED: "partially_filled",
+            OrderStatus.CANCELLED: "cancelled",
+            OrderStatus.REJECTED: "rejected",
+            OrderStatus.SKIPPED: "local_skipped",
+        }
+        return mapping.get(status, "unknown")
+
+    def _build_order_event(
+        self,
+        *,
+        timestamp: object,
+        order_id: str,
+        symbol: str,
+        side: str,
+        status: OrderStatus,
+        quantity: int,
+        requested_price: float,
+        reason: str,
+        status_detail: str,
+        filled_quantity: int = 0,
+        remaining_quantity: int = 0,
+        fill_price: float = 0.0,
+        commission: float = 0.0,
+        gross_value: float = 0.0,
+        net_value: float = 0.0,
+    ) -> OrderEvent:
+        """统一构建订单事件，避免各分支漏填 broker 语义字段。"""
+        return OrderEvent(
+            timestamp=timestamp,
+            order_id=order_id,
+            symbol=symbol,
+            side=side,
+            status=status,
+            quantity=quantity,
+            requested_price=requested_price,
+            filled_quantity=filled_quantity,
+            remaining_quantity=remaining_quantity,
+            broker_status=self._broker_status_for(status),
+            status_detail=status_detail,
+            fill_price=fill_price,
+            commission=commission,
+            gross_value=gross_value,
+            net_value=net_value,
+            reason=reason,
+        )
+
     def execute(
         self,
         timestamp: object,
@@ -82,7 +136,7 @@ class SimulatedExecutionEngine:
                     position_state,
                     fill_events=[],
                     order_events=[
-                        OrderEvent(
+                        self._build_order_event(
                             timestamp=timestamp,
                             order_id=order_id,
                             symbol=symbol,
@@ -91,6 +145,7 @@ class SimulatedExecutionEngine:
                             quantity=decision.quantity,
                             requested_price=market_price,
                             reason="duplicate long entry while position already open",
+                            status_detail="duplicate_position_guard",
                         )
                     ],
                 )
@@ -103,7 +158,7 @@ class SimulatedExecutionEngine:
                     position_state,
                     fill_events=[],
                     order_events=[
-                        OrderEvent(
+                        self._build_order_event(
                             timestamp=timestamp,
                             order_id=order_id,
                             symbol=symbol,
@@ -112,6 +167,7 @@ class SimulatedExecutionEngine:
                             quantity=decision.quantity,
                             requested_price=market_price,
                             reason="entry quantity must be positive",
+                            status_detail="invalid_entry_quantity",
                         )
                     ],
                 )
@@ -127,7 +183,7 @@ class SimulatedExecutionEngine:
                     position_state,
                     fill_events=[],
                     order_events=[
-                        OrderEvent(
+                        self._build_order_event(
                             timestamp=timestamp,
                             order_id=order_id,
                             symbol=symbol,
@@ -136,6 +192,7 @@ class SimulatedExecutionEngine:
                             quantity=decision.quantity,
                             requested_price=market_price,
                             reason="insufficient cash for simulated entry",
+                            status_detail="insufficient_cash",
                         )
                     ],
                 )
@@ -148,7 +205,7 @@ class SimulatedExecutionEngine:
                     position_state,
                     fill_events=[],
                     order_events=[
-                        OrderEvent(
+                        self._build_order_event(
                             timestamp=timestamp,
                             order_id=order_id,
                             symbol=symbol,
@@ -159,6 +216,7 @@ class SimulatedExecutionEngine:
                             filled_quantity=0,
                             remaining_quantity=decision.quantity,
                             reason="order remains open awaiting liquidity",
+                            status_detail="awaiting_entry_liquidity",
                         )
                     ],
                 )
@@ -204,7 +262,7 @@ class SimulatedExecutionEngine:
             )
             remaining_quantity = max(decision.quantity - executable_quantity, 0)
             order_events = [
-                OrderEvent(
+                self._build_order_event(
                     timestamp=timestamp,
                     order_id=order_id,
                     symbol=symbol,
@@ -219,6 +277,7 @@ class SimulatedExecutionEngine:
                     gross_value=round(gross_cost, 4),
                     net_value=round(total_cost, 4),
                     reason=decision.reason if remaining_quantity == 0 else "partially filled and left open for next bar",
+                    status_detail="entry_filled_on_submit" if remaining_quantity == 0 else "entry_partial_fill_waiting",
                 )
             ]
             return ExecutionResult(
@@ -240,7 +299,7 @@ class SimulatedExecutionEngine:
                     position_state,
                     fill_events=[],
                     order_events=[
-                        OrderEvent(
+                        self._build_order_event(
                             timestamp=timestamp,
                             order_id=order_id,
                             symbol=symbol,
@@ -249,6 +308,7 @@ class SimulatedExecutionEngine:
                             quantity=0,
                             requested_price=market_price,
                             reason="cannot exit without an open position",
+                            status_detail="exit_without_position",
                         )
                     ],
                 )
@@ -264,7 +324,7 @@ class SimulatedExecutionEngine:
                     position_state,
                     fill_events=[],
                     order_events=[
-                        OrderEvent(
+                        self._build_order_event(
                             timestamp=timestamp,
                             order_id=order_id,
                             symbol=symbol,
@@ -275,6 +335,7 @@ class SimulatedExecutionEngine:
                             filled_quantity=0,
                             remaining_quantity=position_state.quantity,
                             reason="exit order remains open awaiting liquidity",
+                            status_detail="awaiting_exit_liquidity",
                         )
                     ],
                 )
@@ -316,7 +377,7 @@ class SimulatedExecutionEngine:
                 pnl=round(pnl, 4),
             )
             order_events = [
-                OrderEvent(
+                self._build_order_event(
                     timestamp=timestamp,
                     order_id=order_id,
                     symbol=symbol,
@@ -331,6 +392,7 @@ class SimulatedExecutionEngine:
                     gross_value=round(gross_proceeds, 4),
                     net_value=round(net_proceeds, 4),
                     reason=decision.reason if remaining_quantity == 0 else "partially filled and left open for next bar",
+                    status_detail="exit_filled_on_submit" if remaining_quantity == 0 else "exit_partial_fill_waiting",
                 )
             ]
             return ExecutionResult(

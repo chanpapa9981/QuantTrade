@@ -115,6 +115,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("order_id", backtest_result["orders"][0])
         self.assertIn("filled_quantity", backtest_result["orders"][0])
         self.assertIn("remaining_quantity", backtest_result["orders"][0])
+        self.assertIn("broker_status", backtest_result["orders"][0])
+        self.assertIn("status_detail", backtest_result["orders"][0])
         self.assertTrue(report_path.exists())
         self.assertEqual(export_result["output_path"], str(report_path))
         self.assertIn("run_id", persist_result)
@@ -131,7 +133,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("events", order_detail["detail"])
         self.assertIn("order", order_detail["detail"])
         self.assertEqual(order_detail["detail"]["order"]["order_id"], run_detail["detail"]["orders"][0]["order_id"])
+        self.assertIn("latest_broker_status", order_detail["detail"]["order"])
+        self.assertIn("status_detail", order_detail["detail"]["events"][0])
         self.assertGreaterEqual(len(recent_orders["orders"]), 1)
+        self.assertIn("broker_status", recent_orders["orders"][0])
         self.assertGreaterEqual(len(recent_audit["audit_events"]), 1)
         self.assertIn("history_summary", history_payload)
 
@@ -261,6 +266,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("open", statuses)
         self.assertIn("replaced", statuses)
         self.assertIn("cancelled", statuses)
+        self.assertIn("broker_status", backtest_result["orders"][0])
         self.assertEqual(backtest_result["account"]["open_positions"], 0)
 
 
