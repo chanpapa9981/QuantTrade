@@ -39,6 +39,8 @@ def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, obj
         "order_summary": {
             "total_orders": len(orders),
             "filled_orders": len([item for item in orders if item["status"] == "filled"]),
+            "partial_orders": len([item for item in orders if item["status"] == "partially_filled"]),
+            "cancelled_orders": len([item for item in orders if item["status"] == "cancelled"]),
             "rejected_orders": len([item for item in orders if item["status"] == "rejected"]),
             "skipped_orders": len([item for item in orders if item["status"] == "skipped"]),
         },

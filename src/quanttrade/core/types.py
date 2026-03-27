@@ -14,6 +14,8 @@ class SignalType(str, Enum):
 class OrderStatus(str, Enum):
     CREATED = "created"
     FILLED = "filled"
+    PARTIALLY_FILLED = "partially_filled"
+    CANCELLED = "cancelled"
     REJECTED = "rejected"
     SKIPPED = "skipped"
 
@@ -116,6 +118,8 @@ class OrderEvent:
     status: OrderStatus
     quantity: int
     requested_price: float
+    filled_quantity: int = 0
+    remaining_quantity: int = 0
     fill_price: float = 0.0
     commission: float = 0.0
     gross_value: float = 0.0

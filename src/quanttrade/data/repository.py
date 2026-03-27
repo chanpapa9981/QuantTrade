@@ -205,9 +205,9 @@ class BacktestRunRepository:
                 connection.executemany(
                     """
                     INSERT INTO order_events (
-                        run_id, timestamp, side, status, quantity, requested_price,
-                        fill_price, commission, gross_value, net_value, reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        run_id, timestamp, side, status, quantity, filled_quantity, remaining_quantity,
+                        requested_price, fill_price, commission, gross_value, net_value, reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -216,6 +216,8 @@ class BacktestRunRepository:
                             order["side"],
                             order["status"],
                             order["quantity"],
+                            order.get("filled_quantity", 0),
+                            order.get("remaining_quantity", 0),
                             order["requested_price"],
                             order["fill_price"],
                             order["commission"],
@@ -357,8 +359,8 @@ class BacktestRunRepository:
 
             order_rows = connection.execute(
                 """
-                SELECT timestamp, side, status, quantity, requested_price, fill_price,
-                       commission, gross_value, net_value, reason
+                SELECT timestamp, side, status, quantity, filled_quantity, remaining_quantity,
+                       requested_price, fill_price, commission, gross_value, net_value, reason
                 FROM order_events
                 WHERE run_id = ?
                 ORDER BY timestamp
@@ -411,12 +413,14 @@ class BacktestRunRepository:
                     "side": row[1],
                     "status": row[2],
                     "quantity": row[3],
-                    "requested_price": row[4],
-                    "fill_price": row[5],
-                    "commission": row[6],
-                    "gross_value": row[7],
-                    "net_value": row[8],
-                    "reason": row[9],
+                    "filled_quantity": row[4],
+                    "remaining_quantity": row[5],
+                    "requested_price": row[6],
+                    "fill_price": row[7],
+                    "commission": row[8],
+                    "gross_value": row[9],
+                    "net_value": row[10],
+                    "reason": row[11],
                 }
                 for row in order_rows
             ],
@@ -457,7 +461,8 @@ class BacktestRunRepository:
                 return []
             rows = connection.execute(
                 """
-                SELECT run_id, timestamp, side, status, quantity, fill_price, commission, reason
+                SELECT run_id, timestamp, side, status, quantity, filled_quantity, remaining_quantity,
+                       fill_price, commission, reason
                 FROM order_events
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -473,9 +478,11 @@ class BacktestRunRepository:
                 "side": row[2],
                 "status": row[3],
                 "quantity": row[4],
-                "fill_price": row[5],
-                "commission": row[6],
-                "reason": row[7],
+                "filled_quantity": row[5],
+                "remaining_quantity": row[6],
+                "fill_price": row[7],
+                "commission": row[8],
+                "reason": row[9],
             }
             for row in rows
         ]
@@ -549,7 +556,8 @@ class BacktestRunRepository:
             if "order_events" in table_names:
                 order_rows = connection.execute(
                     """
-                    SELECT run_id, timestamp, side, status, quantity, fill_price, commission, reason
+                    SELECT run_id, timestamp, side, status, quantity, filled_quantity, remaining_quantity,
+                           fill_price, commission, reason
                     FROM order_events
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -563,9 +571,11 @@ class BacktestRunRepository:
                         "side": row[2],
                         "status": row[3],
                         "quantity": row[4],
-                        "fill_price": row[5],
-                        "commission": row[6],
-                        "reason": row[7],
+                        "filled_quantity": row[5],
+                        "remaining_quantity": row[6],
+                        "fill_price": row[7],
+                        "commission": row[8],
+                        "reason": row[9],
                     }
                     for row in order_rows
                 ]

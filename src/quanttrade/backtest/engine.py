@@ -55,6 +55,7 @@ class BacktestEngine:
             timestamp=market_bar.timestamp,
             symbol=position_state.symbol or self.strategy.config.symbol,
             market_price=market_bar.close,
+            market_volume=market_bar.volume,
             account_state=account_state,
             position_state=position_state,
             decision=decision,
@@ -146,50 +147,56 @@ class BacktestEngine:
                 timestamp=bar.timestamp,
                 symbol=symbol,
                 market_price=bar.close,
+                market_volume=bar.volume,
                 account_state=account_state,
                 position_state=position_state,
                 decision=decision,
             )
             account_state = execution.account_state
             position_state = execution.position_state
-            if execution.order_event:
-                orders.append(
-                    {
-                        "timestamp": execution.order_event.timestamp.isoformat(),
-                        "side": execution.order_event.side,
-                        "status": execution.order_event.status.value,
-                        "quantity": execution.order_event.quantity,
-                        "requested_price": round(execution.order_event.requested_price, 4),
-                        "fill_price": round(execution.order_event.fill_price, 4),
-                        "commission": round(execution.order_event.commission, 4),
-                        "gross_value": round(execution.order_event.gross_value, 4),
-                        "net_value": round(execution.order_event.net_value, 4),
-                        "reason": execution.order_event.reason,
-                    }
+            if execution.order_events:
+                orders.extend(
+                    [
+                        {
+                            "timestamp": event.timestamp.isoformat(),
+                            "side": event.side,
+                            "status": event.status.value,
+                            "quantity": event.quantity,
+                            "filled_quantity": event.filled_quantity,
+                            "remaining_quantity": event.remaining_quantity,
+                            "requested_price": round(event.requested_price, 4),
+                            "fill_price": round(event.fill_price, 4),
+                            "commission": round(event.commission, 4),
+                            "gross_value": round(event.gross_value, 4),
+                            "net_value": round(event.net_value, 4),
+                            "reason": event.reason,
+                        }
+                        for event in execution.order_events
+                    ]
                 )
                 audit_log.append(
                     {
-                        "timestamp": execution.order_event.timestamp.isoformat(),
-                        "event": "order_" + execution.order_event.status.value,
+                        "timestamp": execution.order_events[-1].timestamp.isoformat(),
+                        "event": "order_" + execution.order_events[-1].status.value,
                         "signal": decision.signal.value,
-                        "reason": execution.order_event.reason,
+                        "reason": execution.reason,
                         "risk_allowed": 1,
                     }
                 )
-            if execution.fill_event:
-                if execution.fill_event.side == "SELL" and execution.fill_event.pnl > 0:
+            for fill_event in execution.fill_events:
+                if fill_event.side == "SELL" and fill_event.pnl > 0:
                     winning_trades += 1
                 trades.append(
                     {
-                        "timestamp": execution.fill_event.timestamp.isoformat(),
-                        "side": execution.fill_event.side,
-                        "price": round(execution.fill_event.price, 4),
-                        "quantity": execution.fill_event.quantity,
-                        "reason": execution.fill_event.reason,
-                        "commission": round(execution.fill_event.commission, 4),
-                        "gross_value": round(execution.fill_event.gross_value, 4),
-                        "net_value": round(execution.fill_event.net_value, 4),
-                        "pnl": round(execution.fill_event.pnl, 4),
+                        "timestamp": fill_event.timestamp.isoformat(),
+                        "side": fill_event.side,
+                        "price": round(fill_event.price, 4),
+                        "quantity": fill_event.quantity,
+                        "reason": fill_event.reason,
+                        "commission": round(fill_event.commission, 4),
+                        "gross_value": round(fill_event.gross_value, 4),
+                        "net_value": round(fill_event.net_value, 4),
+                        "pnl": round(fill_event.pnl, 4),
                     }
                 )
 
@@ -207,50 +214,56 @@ class BacktestEngine:
                 timestamp=final_bar.timestamp,
                 symbol=symbol,
                 market_price=final_bar.close,
+                market_volume=final_bar.volume,
                 account_state=account_state,
                 position_state=position_state,
                 decision=decision,
             )
             account_state = execution.account_state
             position_state = execution.position_state
-            if execution.order_event:
-                orders.append(
-                    {
-                        "timestamp": execution.order_event.timestamp.isoformat(),
-                        "side": execution.order_event.side,
-                        "status": execution.order_event.status.value,
-                        "quantity": execution.order_event.quantity,
-                        "requested_price": round(execution.order_event.requested_price, 4),
-                        "fill_price": round(execution.order_event.fill_price, 4),
-                        "commission": round(execution.order_event.commission, 4),
-                        "gross_value": round(execution.order_event.gross_value, 4),
-                        "net_value": round(execution.order_event.net_value, 4),
-                        "reason": execution.order_event.reason,
-                    }
+            if execution.order_events:
+                orders.extend(
+                    [
+                        {
+                            "timestamp": event.timestamp.isoformat(),
+                            "side": event.side,
+                            "status": event.status.value,
+                            "quantity": event.quantity,
+                            "filled_quantity": event.filled_quantity,
+                            "remaining_quantity": event.remaining_quantity,
+                            "requested_price": round(event.requested_price, 4),
+                            "fill_price": round(event.fill_price, 4),
+                            "commission": round(event.commission, 4),
+                            "gross_value": round(event.gross_value, 4),
+                            "net_value": round(event.net_value, 4),
+                            "reason": event.reason,
+                        }
+                        for event in execution.order_events
+                    ]
                 )
                 audit_log.append(
                     {
-                        "timestamp": execution.order_event.timestamp.isoformat(),
-                        "event": "order_" + execution.order_event.status.value,
+                        "timestamp": execution.order_events[-1].timestamp.isoformat(),
+                        "event": "order_" + execution.order_events[-1].status.value,
                         "signal": decision.signal.value,
-                        "reason": execution.order_event.reason,
+                        "reason": execution.reason,
                         "risk_allowed": 1,
                     }
                 )
-            if execution.fill_event and execution.fill_event.pnl > 0:
-                winning_trades += 1
-            if execution.fill_event:
+            for fill_event in execution.fill_events:
+                if fill_event.pnl > 0:
+                    winning_trades += 1
                 trades.append(
                     {
-                        "timestamp": execution.fill_event.timestamp.isoformat(),
-                        "side": execution.fill_event.side,
-                        "price": round(execution.fill_event.price, 4),
-                        "quantity": execution.fill_event.quantity,
-                        "reason": execution.fill_event.reason,
-                        "commission": round(execution.fill_event.commission, 4),
-                        "gross_value": round(execution.fill_event.gross_value, 4),
-                        "net_value": round(execution.fill_event.net_value, 4),
-                        "pnl": round(execution.fill_event.pnl, 4),
+                        "timestamp": fill_event.timestamp.isoformat(),
+                        "side": fill_event.side,
+                        "price": round(fill_event.price, 4),
+                        "quantity": fill_event.quantity,
+                        "reason": fill_event.reason,
+                        "commission": round(fill_event.commission, 4),
+                        "gross_value": round(fill_event.gross_value, 4),
+                        "net_value": round(fill_event.net_value, 4),
+                        "pnl": round(fill_event.pnl, 4),
                     }
                 )
             self._mark_to_market(account_state, position_state, final_bar.close)

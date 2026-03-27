@@ -280,7 +280,9 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Time</th>
                   <th>Side</th>
                   <th>Status</th>
-                  <th>Qty</th>
+                  <th>Req Qty</th>
+                  <th>Filled</th>
+                  <th>Remaining</th>
                   <th>Request</th>
                   <th>Fill</th>
                   <th>Reason</th>
@@ -390,6 +392,8 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
           <td>${{order.status}}</td>
           <td>${{fmt(order.quantity)}}</td>
+          <td>${{fmt(order.filled_quantity ?? 0)}}</td>
+          <td>${{fmt(order.remaining_quantity ?? 0)}}</td>
           <td>${{fmt(order.requested_price)}}</td>
           <td>${{fmt(order.fill_price)}}</td>
           <td>${{order.reason}}</td>
@@ -634,7 +638,9 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Time</th>
                   <th>Side</th>
                   <th>Status</th>
-                  <th>Qty</th>
+                  <th>Req Qty</th>
+                  <th>Filled</th>
+                  <th>Remaining</th>
                   <th>Reason</th>
                 </tr>
               </thead>
@@ -702,6 +708,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
           <td>${{order.status}}</td>
           <td>${{fmt(order.quantity)}}</td>
+          <td>${{fmt(order.filled_quantity ?? 0)}}</td>
+          <td>${{fmt(order.remaining_quantity ?? 0)}}</td>
           <td>${{order.reason}}</td>
         </tr>
       `).join("");

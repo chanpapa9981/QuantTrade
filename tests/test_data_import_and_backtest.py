@@ -98,6 +98,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("commission", backtest_result["trades"][0])
         self.assertIn("net_value", backtest_result["trades"][0])
         self.assertGreaterEqual(len(backtest_result["orders"]), 1)
+        self.assertIn("filled_quantity", backtest_result["orders"][0])
+        self.assertIn("remaining_quantity", backtest_result["orders"][0])
         self.assertTrue(report_path.exists())
         self.assertEqual(export_result["output_path"], str(report_path))
         self.assertIn("run_id", persist_result)

@@ -50,6 +50,7 @@ class ExecutionConfig:
     commission_per_share: float = 0.005
     min_commission: float = 1.0
     simulated_slippage_bps: float = 5.0
+    max_fill_ratio_per_bar: float = 0.05
 
 
 @dataclass(slots=True)

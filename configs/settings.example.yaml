@@ -30,6 +30,7 @@ execution:
   commission_per_share: 0.005
   min_commission: 1.0
   simulated_slippage_bps: 5.0
+  max_fill_ratio_per_bar: 0.05
 
 notification:
   provider: telegram
