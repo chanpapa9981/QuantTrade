@@ -22,6 +22,7 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
     def test_partial_entry_generates_partial_fill_and_cancellation(self) -> None:
         result = self.engine.execute(
             timestamp=self.timestamp,
+            order_id="order-entry-1",
             symbol="AAPL",
             market_price=100.0,
             market_volume=1_000.0,
@@ -38,16 +39,15 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.position_state.quantity, 10)
         self.assertEqual(len(result.fill_events), 1)
-        self.assertEqual(len(result.order_events), 2)
+        self.assertEqual(len(result.order_events), 1)
         self.assertEqual(result.order_events[0].status.value, "partially_filled")
         self.assertEqual(result.order_events[0].filled_quantity, 10)
         self.assertEqual(result.order_events[0].remaining_quantity, 15)
-        self.assertEqual(result.order_events[1].status.value, "cancelled")
-        self.assertEqual(result.order_events[1].quantity, 15)
 
     def test_duplicate_entry_is_rejected_when_position_already_open(self) -> None:
         result = self.engine.execute(
             timestamp=self.timestamp,
+            order_id="order-entry-2",
             symbol="AAPL",
             market_price=100.0,
             market_volume=10_000.0,
@@ -69,6 +69,7 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
     def test_partial_exit_reduces_position_and_cancels_remainder(self) -> None:
         result = self.engine.execute(
             timestamp=self.timestamp,
+            order_id="order-exit-1",
             symbol="AAPL",
             market_price=105.0,
             market_volume=500.0,
@@ -87,8 +88,29 @@ class SimulatedExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(result.order_events[0].status.value, "partially_filled")
         self.assertEqual(result.order_events[0].filled_quantity, 5)
         self.assertEqual(result.order_events[0].remaining_quantity, 7)
-        self.assertEqual(result.order_events[1].status.value, "cancelled")
-        self.assertEqual(result.order_events[1].quantity, 7)
+
+    def test_zero_liquidity_keeps_order_open(self) -> None:
+        result = self.engine.execute(
+            timestamp=self.timestamp,
+            order_id="order-entry-open",
+            symbol="AAPL",
+            market_price=100.0,
+            market_volume=0.0,
+            account_state=AccountState(equity=100_000.0, cash=100_000.0),
+            position_state=PositionState(symbol="AAPL"),
+            decision=StrategyDecision(
+                signal=SignalType.LONG_ENTRY,
+                reason="breakout",
+                quantity=12,
+                stop_loss=95.0,
+            ),
+        )
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(len(result.fill_events), 0)
+        self.assertEqual(len(result.order_events), 1)
+        self.assertEqual(result.order_events[0].status.value, "open")
+        self.assertEqual(result.order_events[0].remaining_quantity, 12)
 
 
 if __name__ == "__main__":

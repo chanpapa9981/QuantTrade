@@ -51,6 +51,7 @@ class ExecutionConfig:
     min_commission: float = 1.0
     simulated_slippage_bps: float = 5.0
     max_fill_ratio_per_bar: float = 0.05
+    open_order_timeout_bars: int = 2
 
 
 @dataclass(slots=True)

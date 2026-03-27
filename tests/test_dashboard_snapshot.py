@@ -63,6 +63,7 @@ class DashboardSnapshotTestCase(unittest.TestCase):
         self.assertIn("drawdown_curve", payload["charts"])
         self.assertIn("order_summary", payload)
         self.assertIn("audit_timeline", payload)
+        self.assertIn("open_orders", payload["order_summary"])
         self.assertIn("partial_orders", payload["order_summary"])
         self.assertIn("cancelled_orders", payload["order_summary"])
         self.assertGreaterEqual(len(payload["summary_cards"]), 4)

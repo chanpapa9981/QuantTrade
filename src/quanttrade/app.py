@@ -137,32 +137,38 @@ class QuantTradeApp:
 
     def recent_backtest_runs(self, limit: int = 10) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"runs": repository.fetch_recent_runs(limit=limit)}
 
     def recent_backtest_executions(self, limit: int = 10) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"executions": repository.fetch_recent_executions(limit=limit)}
 
     def backtest_run_detail(self, run_id: str) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             detail = repository.fetch_run_detail(run_id)
             return {"detail": detail}
 
     def recent_order_events(self, limit: int = 20) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"orders": repository.fetch_recent_order_events(limit=limit)}
 
     def recent_audit_events(self, limit: int = 20) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"audit_events": repository.fetch_recent_audit_events(limit=limit)}
 
     def dashboard_history(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, object]:
         with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             bundle = repository.fetch_history_bundle(runs_limit=runs_limit, events_limit=events_limit)
             return build_history_payload(bundle["runs"], bundle["orders"], bundle["audit_events"])

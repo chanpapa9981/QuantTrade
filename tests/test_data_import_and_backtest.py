@@ -11,7 +11,13 @@ from quanttrade.data.storage import LockUnavailableError, database_lock, executi
 
 
 class DataImportAndBacktestTestCase(unittest.TestCase):
-    def _write_config(self, config_path: Path, db_path: Path) -> None:
+    def _write_config(
+        self,
+        config_path: Path,
+        db_path: Path,
+        max_fill_ratio_per_bar: float = 0.05,
+        open_order_timeout_bars: int = 2,
+    ) -> None:
         config_path.write_text(
             "\n".join(
                 [
@@ -25,6 +31,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     "data:",
                     f"  duckdb_path: {db_path}",
                     "  backend: sqlite",
+                    "execution:",
+                    f"  max_fill_ratio_per_bar: {max_fill_ratio_per_bar}",
+                    f"  open_order_timeout_bars: {open_order_timeout_bars}",
                 ]
             ),
             encoding="utf-8",
@@ -98,6 +107,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("commission", backtest_result["trades"][0])
         self.assertIn("net_value", backtest_result["trades"][0])
         self.assertGreaterEqual(len(backtest_result["orders"]), 1)
+        self.assertIn("order_id", backtest_result["orders"][0])
         self.assertIn("filled_quantity", backtest_result["orders"][0])
         self.assertIn("remaining_quantity", backtest_result["orders"][0])
         self.assertTrue(report_path.exists())
@@ -193,6 +203,50 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         with execution_lock(str(db_path), symbol="AAPL", timeframe="1d", blocking=False):
             with self.assertRaises(LockUnavailableError):
                 app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+
+    def test_backtest_keeps_orders_open_across_bars_and_times_out(self) -> None:
+        base_dir = Path("var/test-artifacts/open-order-timeout")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "open-order-timeout.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 7, 1, tzinfo=timezone.utc)
+            closes = [100.0, 101.0, 102.0, 103.0, 104.0, 108.0, 109.0, 110.0, 111.0]
+            for offset, close in enumerate(closes):
+                current = start + timedelta(days=offset)
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(close - 0.8, 2),
+                        "high": round(close + 0.6, 2),
+                        "low": round(close - 1.0, 2),
+                        "close": round(close, 2),
+                        "volume": 2_000_000,
+                    }
+                )
+
+        self._write_config(
+            config_path,
+            db_path,
+            max_fill_ratio_per_bar=0.0,
+            open_order_timeout_bars=1,
+        )
+
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+        backtest_result = app.backtest_symbol(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+
+        statuses = [order["status"] for order in backtest_result["orders"]]
+        self.assertIn("created", statuses)
+        self.assertIn("open", statuses)
+        self.assertIn("cancelled", statuses)
+        self.assertEqual(backtest_result["account"]["open_positions"], 0)
 
 
 if __name__ == "__main__":

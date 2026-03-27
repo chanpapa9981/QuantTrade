@@ -81,6 +81,7 @@
 | W-029 | 稳定性 | 增加数据库文件锁与账户快照落库 | 降低 DuckDB 锁冲突并提升追溯性 | 已完成 |
 | W-030 | 稳定性 | 增加回测执行生命周期与重复执行保护 | 跟踪 running/completed/abandoned 并拦截同标的重复执行 | 已完成 |
 | W-031 | 执行层 | 升级订单状态机为部分成交/撤单感知 | 增加 partial fill、cancelled、重复入场保护和剩余数量记录 | 已完成 |
+| W-032 | 执行层 | 增加跨 bar 挂单续撮合与超时撤单 | 支持 open order、继续撮合、timeout cancel、order_id 追踪 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -156,6 +157,8 @@
 | 2026-03-27 | 回测执行记录查询 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml executions --limit 5` | 通过 |
 | 2026-03-27 | 订单状态机升级（部分成交/撤单） | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
 | 2026-03-27 | 订单状态机持久化链路 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml backtest --symbol AAPL --timeframe 1d --initial-equity 100000 --persist` | 通过 |
+| 2026-03-27 | 跨 bar 挂单续撮合与超时撤单 | `PYTHONPATH=src python3 -m unittest discover -s tests -v` | 通过 |
+| 2026-03-27 | 订单查询兼容旧库迁移 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml orders --limit 5` | 通过 |
 
 ---
 
@@ -172,6 +175,7 @@
 | 2026-03-27 | DuckDB 命令验证按顺序执行 | DuckDB 对同一数据库文件的并发锁更严格 | CLI 使用上避免并发导入与回测同库 |
 | 2026-03-27 | 持久化回测增加 execution lifecycle | 需要区分“运行中 / 完成 / 中断恢复”，并阻止同标的重复触发 | 为启动恢复和稳定性观测提供统一入口 |
 | 2026-03-27 | 模拟执行按 bar 流动性模拟部分成交 | 只有全成/拒绝会让执行层过于理想化，无法支撑后续撤单与实盘适配 | 订单、持久化、Dashboard 全部开始感知 filled / partial / cancelled |
+| 2026-03-27 | open order 在回测层而非执行器内部持有 | 跨 bar 生命周期需要和策略评估、审计日志、超时规则一起编排 | 订单可以被继续撮合、超时取消，并保持完整事件历史 |
 
 ---
 
@@ -195,9 +199,9 @@
 | P0 | 完善订单与账户状态模型 | 为模拟执行闭环做准备 |
 | P0 | 增加回测结果导出 | 为 dashboard 提供输入文件 |
 | P0 | 开始更完整的 dashboard 页面骨架 | 增加参数面板、日志区和更细的图表布局 |
-| P0 | 继续完善订单状态机 | 引入 pending/open order、超时撤单、更多对账字段 |
+| P0 | 继续完善订单状态机 | 引入跨 bar 部分成交续撮合、更多对账字段、order replace/cancel reason |
 | P0 | 开始 dashboard 历史页 | 使用已落库的 run/order/audit 数据 |
-| P0 | 继续完善订单状态机 | 引入 pending/open order、超时撤单、更多对账字段 |
+| P0 | 继续完善订单状态机 | 引入跨 bar 部分成交续撮合、更多对账字段、order replace/cancel reason |
 | P0 | 继续强化稳定性层 | 启动恢复细化、失败重试、实盘级运行锁 |
 | P1 | 提升绩效指标丰富度 | 增加更多风险稳定性指标 |
 | P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
@@ -361,6 +365,17 @@
 | 结果 | 订单记录现在能表达部分成交和剩余撤单，回测与 dashboard 对执行细节更敏感 |
 | 未完成 | pending/open order、超时撤单、部分成交后的跨 bar 续撮合、实盘对账字段 |
 | 备注 | 这是从研究型回测器走向真正执行系统的重要过渡层 |
+
+### 2026-03-27 第 15 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 open order 不只停在单 bar，而是能跨 bar 延续并最终超时撤单 |
+| 输入 | 已有 partial fill、cancelled、execution lifecycle 与 order persistence |
+| 产出 | `open` 状态、`order_id` 追踪、跨 bar 续撮合、timeout cancel、旧库查询自动迁移 |
+| 结果 | 回测开始能表达“订单提交后继续等待成交”的真实流程，订单历史可按同一 `order_id` 串起来看 |
+| 未完成 | replace/modify 订单、跨 bar 价格偏离重定价、实盘对账字段、broker 状态映射 |
+| 备注 | 这一步让执行层更像一个真正的订单状态机，而不只是成交事件生成器 |
 
 ---
 

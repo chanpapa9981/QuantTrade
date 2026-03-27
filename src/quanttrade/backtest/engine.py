@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from math import sqrt
+from uuid import uuid4
 
 from quanttrade.core.types import (
     AccountState,
     BacktestMetrics,
     BacktestRunResult,
     MarketBar,
+    OrderEvent,
     OrderStatus,
+    PendingOrderState,
     PositionState,
     SignalType,
+    StrategyDecision,
 )
 from quanttrade.data.indicators import enrich_market_bars
 from quanttrade.execution.simulator import SimulatedExecutionEngine
@@ -53,6 +57,7 @@ class BacktestEngine:
 
         execution = self.execution_engine.execute(
             timestamp=market_bar.timestamp,
+            order_id="sample-order",
             symbol=position_state.symbol or self.strategy.config.symbol,
             market_price=market_bar.close,
             market_volume=market_bar.volume,
@@ -76,13 +81,13 @@ class BacktestEngine:
         symbol = self.strategy.config.symbol
         account_state = AccountState(equity=initial_equity, cash=initial_equity)
         position_state = PositionState(symbol=symbol)
+        pending_order: PendingOrderState | None = None
         trades: list[dict[str, str | float | int]] = []
         orders: list[dict[str, str | float | int]] = []
         audit_log: list[dict[str, str | float | int]] = []
         equity_curve: list[float] = [initial_equity]
         equity_timeline: list[dict[str, str | float]] = []
         drawdown_timeline: list[dict[str, str | float]] = []
-        winning_trades = 0
         period_returns: list[float] = []
 
         enriched_bars = enrich_market_bars(
@@ -94,6 +99,7 @@ class BacktestEngine:
         )
 
         for bar in enriched_bars:
+            prior_equity = account_state.equity
             if position_state.is_open:
                 position_state.stop_loss = (
                     max(position_state.stop_loss or 0.0, bar.close - self.strategy.config.risk_coefficient_k * bar.atr)
@@ -101,8 +107,71 @@ class BacktestEngine:
                     else position_state.stop_loss
                 )
 
+            if pending_order:
+                pending_order.bars_open += 1
+                if pending_order.bars_open > self.execution_engine.config.open_order_timeout_bars:
+                    cancel_event = OrderEvent(
+                        timestamp=bar.timestamp,
+                        order_id=pending_order.order_id,
+                        symbol=symbol,
+                        side=pending_order.side,
+                        status=OrderStatus.CANCELLED,
+                        quantity=pending_order.remaining_quantity,
+                        requested_price=bar.close,
+                        filled_quantity=0,
+                        remaining_quantity=pending_order.remaining_quantity,
+                        reason="order cancelled after timeout waiting across bars",
+                    )
+                    orders.append(self._serialize_order_event(cancel_event))
+                    audit_log.append(
+                        {
+                            "timestamp": bar.timestamp.isoformat(),
+                            "event": "order_cancelled",
+                            "signal": "long_entry" if pending_order.side == "BUY" else "long_exit",
+                            "reason": "order cancelled after timeout waiting across bars",
+                            "risk_allowed": 1,
+                        }
+                    )
+                    pending_order = None
+                    self._mark_to_market(account_state, position_state, bar.close)
+                    equity_curve.append(account_state.equity)
+                    period_returns.append(self._period_return(prior_equity, account_state.equity))
+                    self._append_curves(equity_timeline, drawdown_timeline, equity_curve, bar.timestamp.isoformat(), account_state.equity)
+                    continue
+
+                execution = self.execution_engine.execute(
+                    timestamp=bar.timestamp,
+                    order_id=pending_order.order_id,
+                    symbol=symbol,
+                    market_price=bar.close,
+                    market_volume=bar.volume,
+                    account_state=account_state,
+                    position_state=position_state,
+                    decision=StrategyDecision(
+                        signal=SignalType.LONG_ENTRY if pending_order.side == "BUY" else SignalType.LONG_EXIT,
+                        reason=pending_order.reason,
+                        stop_loss=pending_order.stop_loss,
+                        quantity=pending_order.remaining_quantity,
+                    ),
+                    allow_existing_position=True,
+                )
+                account_state = execution.account_state
+                position_state = execution.position_state
+                pending_order = self._consume_execution(
+                    execution=execution,
+                    decision_signal=SignalType.LONG_ENTRY if pending_order.side == "BUY" else SignalType.LONG_EXIT,
+                    orders=orders,
+                    trades=trades,
+                    audit_log=audit_log,
+                    pending_order=pending_order,
+                )
+                self._mark_to_market(account_state, position_state, bar.close)
+                equity_curve.append(account_state.equity)
+                period_returns.append(self._period_return(prior_equity, account_state.equity))
+                self._append_curves(equity_timeline, drawdown_timeline, equity_curve, bar.timestamp.isoformat(), account_state.equity)
+                continue
+
             decision = self.strategy.generate_signal(bar, position_state, account_state)
-            prior_equity = account_state.equity
             risk_result = self.risk_engine.validate(account_state, decision, bar)
             audit_log.append(
                 {
@@ -118,9 +187,12 @@ class BacktestEngine:
                     orders.append(
                         {
                             "timestamp": bar.timestamp.isoformat(),
+                            "order_id": "",
                             "side": "BUY" if decision.signal == SignalType.LONG_ENTRY else "SELL",
                             "status": OrderStatus.SKIPPED.value,
                             "quantity": decision.quantity,
+                            "filled_quantity": 0,
+                            "remaining_quantity": decision.quantity,
                             "requested_price": round(bar.close, 4),
                             "fill_price": 0.0,
                             "commission": 0.0,
@@ -143,8 +215,39 @@ class BacktestEngine:
                 self._append_curves(equity_timeline, drawdown_timeline, equity_curve, bar.timestamp.isoformat(), account_state.equity)
                 continue
 
+            if decision.signal == SignalType.HOLD:
+                self._mark_to_market(account_state, position_state, bar.close)
+                equity_curve.append(account_state.equity)
+                period_returns.append(self._period_return(prior_equity, account_state.equity))
+                self._append_curves(equity_timeline, drawdown_timeline, equity_curve, bar.timestamp.isoformat(), account_state.equity)
+                continue
+
+            order_id = str(uuid4())
+            created_event = OrderEvent(
+                timestamp=bar.timestamp,
+                order_id=order_id,
+                symbol=symbol,
+                side="BUY" if decision.signal == SignalType.LONG_ENTRY else "SELL",
+                status=OrderStatus.CREATED,
+                quantity=decision.quantity if decision.signal == SignalType.LONG_ENTRY else position_state.quantity,
+                requested_price=bar.close,
+                filled_quantity=0,
+                remaining_quantity=decision.quantity if decision.signal == SignalType.LONG_ENTRY else position_state.quantity,
+                reason=decision.reason,
+            )
+            orders.append(self._serialize_order_event(created_event))
+            audit_log.append(
+                {
+                    "timestamp": bar.timestamp.isoformat(),
+                    "event": "order_created",
+                    "signal": decision.signal.value,
+                    "reason": decision.reason,
+                    "risk_allowed": 1,
+                }
+            )
             execution = self.execution_engine.execute(
                 timestamp=bar.timestamp,
+                order_id=order_id,
                 symbol=symbol,
                 market_price=bar.close,
                 market_volume=bar.volume,
@@ -154,118 +257,100 @@ class BacktestEngine:
             )
             account_state = execution.account_state
             position_state = execution.position_state
-            if execution.order_events:
-                orders.extend(
-                    [
-                        {
-                            "timestamp": event.timestamp.isoformat(),
-                            "side": event.side,
-                            "status": event.status.value,
-                            "quantity": event.quantity,
-                            "filled_quantity": event.filled_quantity,
-                            "remaining_quantity": event.remaining_quantity,
-                            "requested_price": round(event.requested_price, 4),
-                            "fill_price": round(event.fill_price, 4),
-                            "commission": round(event.commission, 4),
-                            "gross_value": round(event.gross_value, 4),
-                            "net_value": round(event.net_value, 4),
-                            "reason": event.reason,
-                        }
-                        for event in execution.order_events
-                    ]
-                )
-                audit_log.append(
-                    {
-                        "timestamp": execution.order_events[-1].timestamp.isoformat(),
-                        "event": "order_" + execution.order_events[-1].status.value,
-                        "signal": decision.signal.value,
-                        "reason": execution.reason,
-                        "risk_allowed": 1,
-                    }
-                )
-            for fill_event in execution.fill_events:
-                if fill_event.side == "SELL" and fill_event.pnl > 0:
-                    winning_trades += 1
-                trades.append(
-                    {
-                        "timestamp": fill_event.timestamp.isoformat(),
-                        "side": fill_event.side,
-                        "price": round(fill_event.price, 4),
-                        "quantity": fill_event.quantity,
-                        "reason": fill_event.reason,
-                        "commission": round(fill_event.commission, 4),
-                        "gross_value": round(fill_event.gross_value, 4),
-                        "net_value": round(fill_event.net_value, 4),
-                        "pnl": round(fill_event.pnl, 4),
-                    }
-                )
+            requested_quantity = created_event.quantity
+            pending_order = self._consume_execution(
+                execution=execution,
+                decision_signal=decision.signal,
+                orders=orders,
+                trades=trades,
+                audit_log=audit_log,
+                pending_order=PendingOrderState(
+                    order_id=order_id,
+                    symbol=symbol,
+                    side="BUY" if decision.signal == SignalType.LONG_ENTRY else "SELL",
+                    requested_quantity=requested_quantity,
+                    remaining_quantity=requested_quantity,
+                    reason=decision.reason,
+                    requested_price=bar.close,
+                    submitted_at=bar.timestamp,
+                    stop_loss=decision.stop_loss,
+                ),
+            )
 
             self._mark_to_market(account_state, position_state, bar.close)
             equity_curve.append(account_state.equity)
             period_returns.append(self._period_return(prior_equity, account_state.equity))
             self._append_curves(equity_timeline, drawdown_timeline, equity_curve, bar.timestamp.isoformat(), account_state.equity)
 
+        if pending_order and enriched_bars:
+            final_bar = enriched_bars[-1]
+            cancel_event = OrderEvent(
+                timestamp=final_bar.timestamp,
+                order_id=pending_order.order_id,
+                symbol=symbol,
+                side=pending_order.side,
+                status=OrderStatus.CANCELLED,
+                quantity=pending_order.remaining_quantity,
+                requested_price=final_bar.close,
+                filled_quantity=0,
+                remaining_quantity=pending_order.remaining_quantity,
+                reason="backtest ended with open order",
+            )
+            orders.append(self._serialize_order_event(cancel_event))
+            audit_log.append(
+                {
+                    "timestamp": final_bar.timestamp.isoformat(),
+                    "event": "order_cancelled",
+                    "signal": "long_entry" if pending_order.side == "BUY" else "long_exit",
+                    "reason": "backtest ended with open order",
+                    "risk_allowed": 1,
+                }
+            )
+            pending_order = None
+
         if position_state.is_open and enriched_bars:
             final_bar = enriched_bars[-1]
             decision = self.strategy.generate_signal(final_bar, position_state, account_state)
             decision.signal = SignalType.LONG_EXIT
             decision.reason = "forced close at end of backtest"
+            order_id = str(uuid4())
+            orders.append(
+                self._serialize_order_event(
+                    OrderEvent(
+                        timestamp=final_bar.timestamp,
+                        order_id=order_id,
+                        symbol=symbol,
+                        side="SELL",
+                        status=OrderStatus.CREATED,
+                        quantity=position_state.quantity,
+                        requested_price=final_bar.close,
+                        filled_quantity=0,
+                        remaining_quantity=position_state.quantity,
+                        reason=decision.reason,
+                    )
+                )
+            )
             execution = self.execution_engine.execute(
                 timestamp=final_bar.timestamp,
+                order_id=order_id,
                 symbol=symbol,
                 market_price=final_bar.close,
                 market_volume=final_bar.volume,
                 account_state=account_state,
                 position_state=position_state,
                 decision=decision,
+                force_full_fill=True,
             )
             account_state = execution.account_state
             position_state = execution.position_state
-            if execution.order_events:
-                orders.extend(
-                    [
-                        {
-                            "timestamp": event.timestamp.isoformat(),
-                            "side": event.side,
-                            "status": event.status.value,
-                            "quantity": event.quantity,
-                            "filled_quantity": event.filled_quantity,
-                            "remaining_quantity": event.remaining_quantity,
-                            "requested_price": round(event.requested_price, 4),
-                            "fill_price": round(event.fill_price, 4),
-                            "commission": round(event.commission, 4),
-                            "gross_value": round(event.gross_value, 4),
-                            "net_value": round(event.net_value, 4),
-                            "reason": event.reason,
-                        }
-                        for event in execution.order_events
-                    ]
-                )
-                audit_log.append(
-                    {
-                        "timestamp": execution.order_events[-1].timestamp.isoformat(),
-                        "event": "order_" + execution.order_events[-1].status.value,
-                        "signal": decision.signal.value,
-                        "reason": execution.reason,
-                        "risk_allowed": 1,
-                    }
-                )
-            for fill_event in execution.fill_events:
-                if fill_event.pnl > 0:
-                    winning_trades += 1
-                trades.append(
-                    {
-                        "timestamp": fill_event.timestamp.isoformat(),
-                        "side": fill_event.side,
-                        "price": round(fill_event.price, 4),
-                        "quantity": fill_event.quantity,
-                        "reason": fill_event.reason,
-                        "commission": round(fill_event.commission, 4),
-                        "gross_value": round(fill_event.gross_value, 4),
-                        "net_value": round(fill_event.net_value, 4),
-                        "pnl": round(fill_event.pnl, 4),
-                    }
-                )
+            self._consume_execution(
+                execution=execution,
+                decision_signal=decision.signal,
+                orders=orders,
+                trades=trades,
+                audit_log=audit_log,
+                pending_order=None,
+            )
             self._mark_to_market(account_state, position_state, final_bar.close)
             self._append_curves(
                 equity_timeline,
@@ -281,7 +366,6 @@ class BacktestEngine:
             equity_curve,
             period_returns,
             trades,
-            winning_trades,
         )
         return BacktestRunResult(
             symbol=symbol,
@@ -300,6 +384,68 @@ class BacktestEngine:
             equity_curve=equity_timeline,
             drawdown_curve=drawdown_timeline,
         )
+
+    def _consume_execution(
+        self,
+        execution: object,
+        decision_signal: SignalType,
+        orders: list[dict[str, str | float | int]],
+        trades: list[dict[str, str | float | int]],
+        audit_log: list[dict[str, str | float | int]],
+        pending_order: PendingOrderState | None,
+    ) -> PendingOrderState | None:
+        next_pending = pending_order
+        if execution.order_events:
+            orders.extend([self._serialize_order_event(event) for event in execution.order_events])
+            last_event = execution.order_events[-1]
+            audit_log.append(
+                {
+                    "timestamp": last_event.timestamp.isoformat(),
+                    "event": "order_" + last_event.status.value,
+                    "signal": decision_signal.value,
+                    "reason": execution.reason,
+                    "risk_allowed": 1,
+                }
+            )
+            if last_event.status == OrderStatus.FILLED:
+                next_pending = None
+            elif last_event.status in {OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED} and pending_order is not None:
+                next_pending.remaining_quantity = last_event.remaining_quantity
+            elif last_event.status in {OrderStatus.REJECTED, OrderStatus.CANCELLED}:
+                next_pending = None
+        for fill_event in execution.fill_events:
+            trades.append(
+                {
+                    "timestamp": fill_event.timestamp.isoformat(),
+                    "side": fill_event.side,
+                    "price": round(fill_event.price, 4),
+                    "quantity": fill_event.quantity,
+                    "reason": fill_event.reason,
+                    "commission": round(fill_event.commission, 4),
+                    "gross_value": round(fill_event.gross_value, 4),
+                    "net_value": round(fill_event.net_value, 4),
+                    "pnl": round(fill_event.pnl, 4),
+                }
+            )
+        return next_pending
+
+    @staticmethod
+    def _serialize_order_event(event: OrderEvent) -> dict[str, str | float | int]:
+        return {
+            "timestamp": event.timestamp.isoformat(),
+            "order_id": event.order_id,
+            "side": event.side,
+            "status": event.status.value,
+            "quantity": event.quantity,
+            "filled_quantity": event.filled_quantity,
+            "remaining_quantity": event.remaining_quantity,
+            "requested_price": round(event.requested_price, 4),
+            "fill_price": round(event.fill_price, 4),
+            "commission": round(event.commission, 4),
+            "gross_value": round(event.gross_value, 4),
+            "net_value": round(event.net_value, 4),
+            "reason": event.reason,
+        }
 
     @staticmethod
     def _mark_to_market(account_state: AccountState, position_state: PositionState, market_price: float) -> None:
@@ -333,7 +479,6 @@ class BacktestEngine:
         equity_curve: list[float],
         period_returns: list[float],
         trades: list[dict[str, str | float | int]],
-        winning_trades: int,
     ) -> BacktestMetrics:
         peak = equity_curve[0] if equity_curve else initial_equity
         max_drawdown = 0.0
@@ -352,6 +497,7 @@ class BacktestEngine:
 
         closing_trades = [trade for trade in trades if trade["side"] == "SELL"]
         completed_trades = len(closing_trades)
+        winning_trades = sum(1 for trade in closing_trades if float(trade.get("pnl", 0.0)) > 0)
         win_rate = winning_trades / completed_trades if completed_trades else 0.0
         losing_trades = sum(1 for trade in closing_trades if float(trade.get("pnl", 0.0)) < 0)
         total_profit = sum(float(trade.get("pnl", 0.0)) for trade in closing_trades if float(trade.get("pnl", 0.0)) > 0)

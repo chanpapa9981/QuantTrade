@@ -41,15 +41,18 @@ class SimulatedExecutionEngine:
     def execute(
         self,
         timestamp: object,
+        order_id: str,
         symbol: str,
         market_price: float,
         market_volume: float,
         account_state: AccountState,
         position_state: PositionState,
         decision: StrategyDecision,
+        allow_existing_position: bool = False,
+        force_full_fill: bool = False,
     ) -> ExecutionResult:
         if decision.signal == SignalType.LONG_ENTRY:
-            if position_state.is_open:
+            if position_state.is_open and not allow_existing_position:
                 return ExecutionResult(
                     False,
                     "duplicate long entry while position already open",
@@ -59,6 +62,7 @@ class SimulatedExecutionEngine:
                     order_events=[
                         OrderEvent(
                             timestamp=timestamp,
+                            order_id=order_id,
                             symbol=symbol,
                             side="BUY",
                             status=OrderStatus.REJECTED,
@@ -79,6 +83,7 @@ class SimulatedExecutionEngine:
                     order_events=[
                         OrderEvent(
                             timestamp=timestamp,
+                            order_id=order_id,
                             symbol=symbol,
                             side="BUY",
                             status=OrderStatus.REJECTED,
@@ -88,31 +93,62 @@ class SimulatedExecutionEngine:
                         )
                     ],
                 )
-            liquidity_quantity = self._liquidity_capacity(market_volume)
+            liquidity_quantity = decision.quantity if force_full_fill else self._liquidity_capacity(market_volume)
             affordable_quantity = max(int((account_state.cash - self.config.min_commission) / fill_price), 0)
             executable_quantity = min(decision.quantity, liquidity_quantity, affordable_quantity)
-            if executable_quantity <= 0:
+            if affordable_quantity <= 0:
                 return ExecutionResult(
                     False,
-                    "insufficient cash or liquidity for simulated entry",
+                    "insufficient cash for simulated entry",
                     account_state,
                     position_state,
                     fill_events=[],
                     order_events=[
                         OrderEvent(
                             timestamp=timestamp,
+                            order_id=order_id,
                             symbol=symbol,
                             side="BUY",
                             status=OrderStatus.REJECTED,
                             quantity=decision.quantity,
                             requested_price=market_price,
-                            reason="insufficient cash or liquidity for simulated entry",
+                            reason="insufficient cash for simulated entry",
+                        )
+                    ],
+                )
+            if executable_quantity <= 0:
+                return ExecutionResult(
+                    True,
+                    "order remains open awaiting liquidity",
+                    account_state,
+                    position_state,
+                    fill_events=[],
+                    order_events=[
+                        OrderEvent(
+                            timestamp=timestamp,
+                            order_id=order_id,
+                            symbol=symbol,
+                            side="BUY",
+                            status=OrderStatus.OPEN,
+                            quantity=decision.quantity,
+                            requested_price=market_price,
+                            filled_quantity=0,
+                            remaining_quantity=decision.quantity,
+                            reason="order remains open awaiting liquidity",
                         )
                     ],
                 )
             commission = self._commission(executable_quantity)
             gross_cost = executable_quantity * fill_price
             total_cost = gross_cost + commission
+            current_quantity = position_state.quantity
+            next_quantity = current_quantity + executable_quantity
+            blended_entry_price = fill_price
+            if current_quantity > 0 and next_quantity > 0:
+                blended_entry_price = round(
+                    ((position_state.entry_price * current_quantity) + (fill_price * executable_quantity)) / next_quantity,
+                    4,
+                )
 
             next_account = AccountState(
                 equity=account_state.equity,
@@ -125,9 +161,9 @@ class SimulatedExecutionEngine:
             )
             next_state = PositionState(
                 symbol=symbol,
-                quantity=executable_quantity,
-                entry_price=fill_price,
-                stop_loss=decision.stop_loss,
+                quantity=next_quantity,
+                entry_price=blended_entry_price,
+                stop_loss=decision.stop_loss or position_state.stop_loss,
                 market_price=fill_price,
             )
             fill_event = FillEvent(
@@ -145,6 +181,7 @@ class SimulatedExecutionEngine:
             order_events = [
                 OrderEvent(
                     timestamp=timestamp,
+                    order_id=order_id,
                     symbol=symbol,
                     side="BUY",
                     status=OrderStatus.FILLED if remaining_quantity == 0 else OrderStatus.PARTIALLY_FILLED,
@@ -156,23 +193,9 @@ class SimulatedExecutionEngine:
                     commission=commission,
                     gross_value=round(gross_cost, 4),
                     net_value=round(total_cost, 4),
-                    reason=decision.reason if remaining_quantity == 0 else "partially filled due to simulated liquidity/cash cap",
+                    reason=decision.reason if remaining_quantity == 0 else "partially filled and left open for next bar",
                 )
             ]
-            if remaining_quantity > 0:
-                order_events.append(
-                    OrderEvent(
-                        timestamp=timestamp,
-                        symbol=symbol,
-                        side="BUY",
-                        status=OrderStatus.CANCELLED,
-                        quantity=remaining_quantity,
-                        requested_price=market_price,
-                        filled_quantity=0,
-                        remaining_quantity=remaining_quantity,
-                        reason="remaining quantity cancelled after partial fill",
-                    )
-                )
             return ExecutionResult(
                 True,
                 "simulated long entry executed" if remaining_quantity == 0 else "simulated long entry partially executed",
@@ -193,6 +216,7 @@ class SimulatedExecutionEngine:
                     order_events=[
                         OrderEvent(
                             timestamp=timestamp,
+                            order_id=order_id,
                             symbol=symbol,
                             side="SELL",
                             status=OrderStatus.REJECTED,
@@ -203,25 +227,27 @@ class SimulatedExecutionEngine:
                     ],
                 )
             fill_price = self._apply_slippage(market_price, "SELL")
-            liquidity_quantity = self._liquidity_capacity(market_volume)
+            liquidity_quantity = position_state.quantity if force_full_fill else self._liquidity_capacity(market_volume)
             executable_quantity = min(position_state.quantity, liquidity_quantity)
             if executable_quantity <= 0:
                 return ExecutionResult(
-                    False,
-                    "insufficient liquidity for simulated exit",
+                    True,
+                    "exit order remains open awaiting liquidity",
                     account_state,
                     position_state,
                     fill_events=[],
                     order_events=[
                         OrderEvent(
                             timestamp=timestamp,
+                            order_id=order_id,
                             symbol=symbol,
                             side="SELL",
-                            status=OrderStatus.CANCELLED,
+                            status=OrderStatus.OPEN,
                             quantity=position_state.quantity,
                             requested_price=market_price,
+                            filled_quantity=0,
                             remaining_quantity=position_state.quantity,
-                            reason="exit cancelled because no simulated liquidity was available",
+                            reason="exit order remains open awaiting liquidity",
                         )
                     ],
                 )
@@ -265,6 +291,7 @@ class SimulatedExecutionEngine:
             order_events = [
                 OrderEvent(
                     timestamp=timestamp,
+                    order_id=order_id,
                     symbol=symbol,
                     side="SELL",
                     status=OrderStatus.FILLED if remaining_quantity == 0 else OrderStatus.PARTIALLY_FILLED,
@@ -276,23 +303,9 @@ class SimulatedExecutionEngine:
                     commission=commission,
                     gross_value=round(gross_proceeds, 4),
                     net_value=round(net_proceeds, 4),
-                    reason=decision.reason if remaining_quantity == 0 else "partially filled due to simulated liquidity cap",
+                    reason=decision.reason if remaining_quantity == 0 else "partially filled and left open for next bar",
                 )
             ]
-            if remaining_quantity > 0:
-                order_events.append(
-                    OrderEvent(
-                        timestamp=timestamp,
-                        symbol=symbol,
-                        side="SELL",
-                        status=OrderStatus.CANCELLED,
-                        quantity=remaining_quantity,
-                        requested_price=market_price,
-                        filled_quantity=0,
-                        remaining_quantity=remaining_quantity,
-                        reason="remaining quantity cancelled after partial exit fill",
-                    )
-                )
             return ExecutionResult(
                 True,
                 "simulated exit executed" if remaining_quantity == 0 else "simulated exit partially executed",

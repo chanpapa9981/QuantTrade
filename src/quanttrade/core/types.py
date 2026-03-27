@@ -13,6 +13,7 @@ class SignalType(str, Enum):
 
 class OrderStatus(str, Enum):
     CREATED = "created"
+    OPEN = "open"
     FILLED = "filled"
     PARTIALLY_FILLED = "partially_filled"
     CANCELLED = "cancelled"
@@ -111,8 +112,23 @@ class FillEvent:
 
 
 @dataclass(slots=True)
+class PendingOrderState:
+    order_id: str
+    symbol: str
+    side: str
+    requested_quantity: int
+    remaining_quantity: int
+    reason: str
+    requested_price: float
+    submitted_at: datetime
+    stop_loss: float | None = None
+    bars_open: int = 0
+
+
+@dataclass(slots=True)
 class OrderEvent:
     timestamp: datetime
+    order_id: str
     symbol: str
     side: str
     status: OrderStatus

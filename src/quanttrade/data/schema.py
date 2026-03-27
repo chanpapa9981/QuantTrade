@@ -43,6 +43,7 @@ def create_schema(db_path: str) -> None:
 
             CREATE TABLE IF NOT EXISTS order_events (
                 run_id TEXT NOT NULL,
+                order_id TEXT NOT NULL DEFAULT '',
                 timestamp TEXT NOT NULL,
                 side TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -93,6 +94,7 @@ def create_schema(db_path: str) -> None:
             ON backtest_executions(symbol, timeframe, status, started_at);
             """
         )
+        connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS order_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS filled_quantity INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS remaining_quantity INTEGER DEFAULT 0;")
     finally:
