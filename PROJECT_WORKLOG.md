@@ -87,6 +87,7 @@
 | W-035 | Dashboard | 在历史页展示订单生命周期摘要 | 把 `order_id`、final status、status path 直接显示在历史 HTML 中 | 已完成 |
 | W-036 | Dashboard | 增加历史页订单生命周期统计卡片 | 展示 lifecycle filled/cancelled/repriced 等摘要数量 | 已完成 |
 | W-037 | Dashboard | 增加历史页生命周期状态筛选 | 支持按 all/filled/cancelled/open/repriced 过滤生命周期表 | 已完成 |
+| W-038 | Dashboard | 增加历史页订单生命周期详情联动 | 点击 lifecycle 行即可查看该订单的原始事件明细 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -169,6 +170,7 @@
 | 2026-03-27 | 历史页订单生命周期展示 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
 | 2026-03-27 | 历史页生命周期统计卡片 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
 | 2026-03-27 | 历史页生命周期状态筛选 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
+| 2026-03-27 | 历史页订单生命周期详情联动 | `PYTHONPATH=src python3 -m quanttrade.cli --config configs/settings.example.yaml history-html --runs-limit 5 --events-limit 10 --output var/reports/history.html` | 通过 |
 
 ---
 
@@ -191,6 +193,7 @@
 | 2026-03-27 | 历史 dashboard 优先展示 order lifecycle 而不只展示 event stream | 研究和排错更关心“订单最终经历了什么”而不是只看孤立事件 | 历史页信息密度更高，也更适合后续接实盘订单排查 |
 | 2026-03-27 | 历史 dashboard 增加 lifecycle 聚合卡片 | 长表格之外需要一眼看出订单状态分布，方便快速复盘 | 历史页开始兼顾总览和明细两种阅读方式 |
 | 2026-03-27 | 历史页筛选先做前端静态过滤 | 当前页面是静态 HTML，前端内筛选比新增后端接口更轻量且足够解决大部分复盘需求 | 不改数据接口也能提升历史页可用性 |
+| 2026-03-27 | 历史页订单详情先做同页联动而不是页面跳转 | 静态 HTML 下同页联动实现成本更低、体验也更顺滑 | 先满足复盘排错需求，后续若做服务端再扩展深链接 |
 
 ---
 
@@ -222,6 +225,7 @@
 | P1 | 增加日志持久化查询视图 | 为 dashboard 和排错提供历史日志 |
 | P1 | 增加 order lifecycle 历史页组件 | 增加状态筛选、按 run/order 跳转、更多摘要字段 |
 | P1 | 增加历史页生命周期筛选交互 | 增加按 run/order 跳转和多条件组合筛选 |
+| P1 | 增加历史页订单详情深链接 | 支持从 lifecycle 表跳到单笔订单详情视图或导出 |
 
 ---
 
@@ -448,6 +452,17 @@
 | 结果 | 历史 HTML 现在能更快聚焦异常订单，而不需要手动在表格里查找 |
 | 未完成 | 按 run/order 跳转、多条件筛选、详情联动 |
 | 备注 | 这是静态 dashboard 走向“轻交互研究面板”的小一步 |
+
+### 2026-03-27 第 21 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让历史页中的订单生命周期不只可筛选，还能直接查看明细事件 |
+| 输入 | 已有 lifecycle 表、状态筛选和 `order_lifecycle_details` 数据 |
+| 产出 | `Lifecycle Detail` 面板，点击某个 `order_id` 即联动展示该订单的事件流 |
+| 结果 | 现在在一页内就能完成“发现异常订单 -> 查看状态路径 -> 查看原始事件”的闭环 |
+| 未完成 | URL 深链接、多条件筛选、跨 run/order 的联动导航 |
+| 备注 | 这一步让历史页更接近一个轻量的订单排错工作台 |
 
 ---
 

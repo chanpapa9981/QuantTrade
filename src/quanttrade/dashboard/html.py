@@ -584,6 +584,19 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       border-radius: 10px;
       padding: 8px 10px;
     }}
+    .link-button {{
+      background: transparent;
+      color: var(--accent);
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+    }}
+    .muted {{
+      color: var(--muted);
+      font-size: 13px;
+    }}
     .table-wrap {{
       overflow-x: auto;
     }}
@@ -672,6 +685,27 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                 </tr>
               </thead>
               <tbody id="lifecycle-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Lifecycle Detail</h2>
+          <div class="panel-note">Click an order lifecycle to inspect the underlying event stream</div>
+          <div id="lifecycle-detail-meta" class="muted"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th>Req Qty</th>
+                  <th>Filled</th>
+                  <th>Remaining</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="lifecycle-detail-table"></tbody>
             </table>
           </div>
         </section>
@@ -774,15 +808,44 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       }}
       return payload.order_lifecycles.filter(order => order.final_status === mode);
     }}
+    let selectedLifecycleOrderId = "";
     function renderLifecycles() {{
-      document.getElementById("lifecycle-table").innerHTML = filteredLifecycles().map(order => `
+      const rows = filteredLifecycles();
+      if (!rows.some(order => order.order_id === selectedLifecycleOrderId)) {{
+        selectedLifecycleOrderId = rows[0]?.order_id ?? "";
+      }}
+      document.getElementById("lifecycle-table").innerHTML = rows.map(order => `
         <tr>
-          <td>${{order.order_id}}</td>
+          <td><button class="link-button" data-order-id="${{order.order_id}}">${{order.order_id}}</button></td>
           <td class="${{order.side === "BUY" ? "buy" : "sell"}}">${{order.side}}</td>
           <td>${{order.final_status}}</td>
           <td>${{fmt(order.requested_quantity)}}</td>
           <td>${{fmt(order.filled_quantity)}}</td>
           <td>${{order.status_path}}</td>
+        </tr>
+      `).join("");
+      document.querySelectorAll("[data-order-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          selectedLifecycleOrderId = node.getAttribute("data-order-id") || "";
+          renderLifecycleDetail();
+        }});
+      }});
+      renderLifecycleDetail();
+    }}
+    function renderLifecycleDetail() {{
+      const events = payload.order_lifecycle_details[selectedLifecycleOrderId] || [];
+      const lifecycle = payload.order_lifecycles.find(order => order.order_id === selectedLifecycleOrderId);
+      document.getElementById("lifecycle-detail-meta").textContent = lifecycle
+        ? `Order ${{lifecycle.order_id}} | Final: ${{lifecycle.final_status}} | Path: ${{lifecycle.status_path}}`
+        : "No order selected.";
+      document.getElementById("lifecycle-detail-table").innerHTML = events.map(event => `
+        <tr>
+          <td>${{event.timestamp}}</td>
+          <td>${{event.status}}</td>
+          <td>${{fmt(event.quantity)}}</td>
+          <td>${{fmt(event.filled_quantity ?? 0)}}</td>
+          <td>${{fmt(event.remaining_quantity ?? 0)}}</td>
+          <td>${{event.reason}}</td>
         </tr>
       `).join("");
     }}

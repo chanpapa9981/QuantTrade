@@ -32,6 +32,18 @@ def _build_order_lifecycles(orders: list[dict[str, object]]) -> list[dict[str, o
     return lifecycles
 
 
+def _build_order_lifecycle_details(orders: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for order in orders:
+        order_id = str(order.get("order_id", ""))
+        if not order_id:
+            continue
+        grouped.setdefault(order_id, []).append(order)
+    for events in grouped.values():
+        events.sort(key=lambda item: str(item.get("timestamp", "")))
+    return grouped
+
+
 def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, object]:
     metrics = backtest_result["metrics"]
     trades = backtest_result["trades"]
@@ -90,6 +102,7 @@ def build_history_payload(
 ) -> dict[str, object]:
     latest_run = runs[0] if runs else {}
     order_lifecycles = _build_order_lifecycles(orders)
+    order_lifecycle_details = _build_order_lifecycle_details(orders)
     return {
         "history_summary": {
             "total_runs": len(runs),
@@ -104,6 +117,7 @@ def build_history_payload(
         },
         "runs_table": runs,
         "order_lifecycles": order_lifecycles,
+        "order_lifecycle_details": order_lifecycle_details,
         "recent_orders": orders,
         "recent_audit_events": audit_events,
     }
