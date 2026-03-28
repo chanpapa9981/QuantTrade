@@ -530,6 +530,99 @@ class BacktestRunRepository:
             failure_class="ProtectionMode",
         )
 
+    def save_notification_event(
+        self,
+        *,
+        severity: str,
+        category: str,
+        title: str,
+        message: str,
+        provider: str,
+        delivery_status: str,
+        delivery_target: str = "",
+        symbol: str = "",
+        timeframe: str = "",
+        run_id: str = "",
+        execution_id: str = "",
+        request_id: str = "",
+    ) -> str:
+        """保存一条通知事件。
+
+        这层记录的不是“系统内部日志”，而是“理论上应该通知外部世界的重要事件”。
+        所以它天然适合后续做通知补发、失败重投和告警历史查询。
+        """
+        connection = connect_database(self.db_path)
+        event_id = str(uuid4())
+        created_at = datetime.now(UTC).isoformat()
+        try:
+            connection.execute(
+                """
+                INSERT INTO notification_events (
+                    event_id, timestamp, severity, category, title, message,
+                    provider, delivery_status, delivery_target,
+                    symbol, timeframe, run_id, execution_id, request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    created_at,
+                    severity[:20],
+                    category[:40],
+                    title[:160],
+                    message[:500],
+                    provider[:40],
+                    delivery_status[:40],
+                    delivery_target[:300],
+                    symbol[:40],
+                    timeframe[:20],
+                    run_id[:80],
+                    execution_id[:80],
+                    request_id[:80],
+                ),
+            )
+            return event_id
+        finally:
+            connection.close()
+
+    def fetch_recent_notification_events(self, limit: int = 20) -> list[dict[str, object]]:
+        """查询最近产生的通知事件。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "notification_events" for table in tables):
+                return []
+            rows = connection.execute(
+                """
+                SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
+                       delivery_target, symbol, timeframe, run_id, execution_id, request_id
+                FROM notification_events
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            {
+                "event_id": row[0],
+                "timestamp": row[1],
+                "severity": row[2],
+                "category": row[3],
+                "title": row[4],
+                "message": row[5],
+                "provider": row[6],
+                "delivery_status": row[7],
+                "delivery_target": row[8],
+                "symbol": row[9],
+                "timeframe": row[10],
+                "run_id": row[11],
+                "execution_id": row[12],
+                "request_id": row[13],
+            }
+            for row in rows
+        ]
+
     def recover_stale_executions(self, symbol: str, timeframe: str) -> int:
         """把异常中断后残留的 running 记录修正为 abandoned。"""
         connection = connect_database(self.db_path)
@@ -1185,7 +1278,7 @@ class BacktestRunRepository:
         ]
 
     def fetch_history_bundle(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, list[dict[str, object]]]:
-        """一次性取回历史页面需要的 runs / executions / orders / audit 四组数据。
+        """一次性取回历史页面需要的 runs / executions / orders / audit / notifications 五组数据。
 
         之所以把 execution 单独带出来，是因为“运行有没有成功”与“订单后来发生了什么”
         属于两个不同层级的问题。历史页需要同时看到这两层，排错才完整。
@@ -1198,6 +1291,7 @@ class BacktestRunRepository:
             executions: list[dict[str, object]] = []
             orders: list[dict[str, object]] = []
             audit_events: list[dict[str, object]] = []
+            notification_events: list[dict[str, object]] = []
 
             if "backtest_runs" in table_names:
                 run_rows = connection.execute(
@@ -1291,6 +1385,36 @@ class BacktestRunRepository:
                     }
                     for row in audit_rows
                 ]
+            if "notification_events" in table_names:
+                notification_rows = connection.execute(
+                    """
+                    SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
+                           delivery_target, symbol, timeframe, run_id, execution_id, request_id
+                    FROM notification_events
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (events_limit,),
+                ).fetchall()
+                notification_events = [
+                    {
+                        "event_id": row[0],
+                        "timestamp": row[1],
+                        "severity": row[2],
+                        "category": row[3],
+                        "title": row[4],
+                        "message": row[5],
+                        "provider": row[6],
+                        "delivery_status": row[7],
+                        "delivery_target": row[8],
+                        "symbol": row[9],
+                        "timeframe": row[10],
+                        "run_id": row[11],
+                        "execution_id": row[12],
+                        "request_id": row[13],
+                    }
+                    for row in notification_rows
+                ]
         finally:
             connection.close()
 
@@ -1299,6 +1423,7 @@ class BacktestRunRepository:
             "executions": executions,
             "orders": orders,
             "audit_events": audit_events,
+            "notification_events": notification_events,
         }
 
     @staticmethod

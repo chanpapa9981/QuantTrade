@@ -1151,6 +1151,27 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </section>
 
         <section class="panel">
+          <h2 class="panel-title">Recent Notifications</h2>
+          <div class="panel-note">Latest controller alerts and local delivery outcomes</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Severity</th>
+                  <th>Category</th>
+                  <th>Title</th>
+                  <th>Status</th>
+                  <th>Provider</th>
+                  <th>Execution</th>
+                </tr>
+              </thead>
+              <tbody id="notifications-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Recent Audit Events</h2>
           <div class="panel-note">Latest strategy and risk events</div>
           <div class="table-wrap">
@@ -1284,6 +1305,9 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Anomalous Requests", value: summary.anomalous_execution_requests }},
         {{ label: "Critical Requests", value: summary.critical_execution_requests }},
         {{ label: "Cooldown Active", value: summary.cooldown_protected_requests }},
+        {{ label: "Notifications", value: summary.total_notifications }},
+        {{ label: "Critical Alerts", value: summary.critical_notifications }},
+        {{ label: "Queued Alerts", value: summary.queued_notifications }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
@@ -1604,6 +1628,26 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </tr>
       `).join("");
     }}
+    function renderNotifications() {{
+      // 通知事件是“系统决定应该提醒人”的那一层，比普通日志更接近运维值班视角。
+      const rows = payload.recent_notifications.filter(event => {{
+        if (state.runId !== "all" && event.run_id && event.run_id !== state.runId) return false;
+        if (state.requestId && event.request_id && event.request_id !== state.requestId) return false;
+        if (state.executionId && event.execution_id && event.execution_id !== state.executionId) return false;
+        return true;
+      }});
+      document.getElementById("notifications-table").innerHTML = rows.length ? rows.map(event => `
+        <tr>
+          <td>${{event.timestamp}}</td>
+          <td>${{event.severity}}</td>
+          <td>${{event.category}}</td>
+          <td>${{event.title}}</td>
+          <td>${{event.delivery_status}}</td>
+          <td>${{event.provider}}</td>
+          <td>${{event.execution_id || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="7" class="muted">No notification events in the current view.</td></tr>';
+    }}
     async function copyCurrentLink() {{
       // 优先用浏览器剪贴板 API；如果环境不支持，就退化成 prompt。
       const button = document.getElementById("copy-link");
@@ -1632,6 +1676,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       renderExecutions();
       renderLifecycles();
       renderOrders();
+      renderNotifications();
       renderAudit();
       writeHashState();
     }}

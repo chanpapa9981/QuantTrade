@@ -69,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     order_detail_parser.add_argument("--order-id", required=True, help="Persisted order id")
     audit_parser = subparsers.add_parser("audit-events", help="List recent persisted audit events")
     audit_parser.add_argument("--limit", type=int, default=20, help="Number of audit events to list")
+    notifications_parser = subparsers.add_parser("notifications", help="List recent notification events")
+    notifications_parser.add_argument("--limit", type=int, default=20, help="Number of notification events to list")
     history_parser = subparsers.add_parser("history", help="Build dashboard-ready historical summary")
     history_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to include")
     history_parser.add_argument("--events-limit", type=int, default=20, help="Number of order/audit events to include")
@@ -198,6 +200,10 @@ def main() -> None:
 
     if args.command == "audit-events":
         print(json.dumps(app.recent_audit_events(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notifications":
+        print(json.dumps(app.recent_notification_events(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "history":

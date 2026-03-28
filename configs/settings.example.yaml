@@ -44,3 +44,5 @@ execution:
 notification:
   provider: telegram
   enabled: false
+  min_level: warning
+  outbox_path: var/notifications/outbox.jsonl

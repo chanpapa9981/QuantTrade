@@ -322,6 +322,7 @@ def build_history_payload(
     executions: list[dict[str, object]],
     orders: list[dict[str, object]],
     audit_events: list[dict[str, object]],
+    notification_events: list[dict[str, object]],
 ) -> dict[str, object]:
     """把历史运行结果整理成历史页所需的聚合结构。"""
     latest_run = runs[0] if runs else {}
@@ -350,6 +351,9 @@ def build_history_payload(
                 [item for item in execution_requests if item.get("health_label") == "critical"]
             ),
             "cooldown_protected_requests": len([item for item in execution_requests if item.get("cooldown_active")]),
+            "total_notifications": len(notification_events),
+            "critical_notifications": len([item for item in notification_events if item.get("severity") == "critical"]),
+            "queued_notifications": len([item for item in notification_events if item.get("delivery_status") == "queued"]),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),
@@ -379,4 +383,5 @@ def build_history_payload(
         "order_lifecycle_details": order_lifecycle_details,
         "recent_orders": orders,
         "recent_audit_events": audit_events,
+        "recent_notifications": notification_events,
     }

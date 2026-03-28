@@ -30,6 +30,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         protection_mode_failure_threshold: int = 2,
         protection_mode_cooldown_seconds: int = 0,
         skip_run_on_protection_mode: bool = True,
+        notification_enabled: bool = False,
+        notification_min_level: str = "warning",
+        notification_outbox_path: str = "var/notifications/test-outbox.jsonl",
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -56,6 +59,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  protection_mode_failure_threshold: {protection_mode_failure_threshold}",
                     f"  protection_mode_cooldown_seconds: {protection_mode_cooldown_seconds}",
                     f"  skip_run_on_protection_mode: {'true' if skip_run_on_protection_mode else 'false'}",
+                    "notification:",
+                    "  provider: telegram",
+                    f"  enabled: {'true' if notification_enabled else 'false'}",
+                    f"  min_level: {notification_min_level}",
+                    f"  outbox_path: {notification_outbox_path}",
                 ]
             ),
             encoding="utf-8",
@@ -68,8 +76,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         csv_path = base_dir / "bars.csv"
         db_path = base_dir / "quanttrade-test.duckdb"
         config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
         if db_path.exists():
             db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
 
         with csv_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
@@ -117,6 +128,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         recent_orders = app.recent_order_events(limit=5)
         order_detail = app.order_detail(order_id=run_detail["detail"]["orders"][0]["order_id"])
         recent_audit = app.recent_audit_events(limit=5)
+        recent_notifications = app.recent_notification_events(limit=5)
         history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
 
         self.assertEqual(import_result["rows_inserted"], 30)
@@ -189,6 +201,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(recent_orders["orders"]), 1)
         self.assertIn("broker_status", recent_orders["orders"][0])
         self.assertGreaterEqual(len(recent_audit["audit_events"]), 1)
+        self.assertEqual(len(recent_notifications["notifications"]), 0)
         self.assertIn("history_summary", history_payload)
         self.assertIn("recent_executions", history_payload)
         self.assertIn("execution_requests", history_payload)
@@ -203,7 +216,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("retry_scheduled_executions", history_payload["history_summary"])
         self.assertIn("protection_mode_executions", history_payload["history_summary"])
         self.assertIn("top_request_failure_class", history_payload["history_summary"])
+        self.assertIn("total_notifications", history_payload["history_summary"])
+        self.assertIn("critical_notifications", history_payload["history_summary"])
+        self.assertIn("queued_notifications", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
+        self.assertIn("recent_notifications", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""
@@ -308,8 +325,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         csv_path = base_dir / "bars.csv"
         db_path = base_dir / "retry-test.duckdb"
         config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
         if db_path.exists():
             db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
 
         with csv_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
@@ -338,6 +358,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
             retry_backoff_strategy="exponential",
             retry_backoff_multiplier=3.0,
             max_retry_backoff_seconds=10.0,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
         )
         app = QuantTradeApp(str(config_path))
         app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
@@ -360,6 +382,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         recent_executions = app.recent_backtest_executions(limit=5)
         recent_request_chains = app.recent_execution_requests(limit=5)
         request_detail = app.execution_request_detail(request_id=persist_result["request_id"])
+        recent_notifications = app.recent_notification_events(limit=5)
 
         self.assertEqual(persist_result["status"], "completed")
         self.assertIn("request_id", persist_result)
@@ -390,6 +413,12 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_executions["executions"][0]["request_id"], persist_result["request_id"])
         self.assertEqual(recent_executions["executions"][1]["request_id"], persist_result["request_id"])
         self.assertIn("transient failure", recent_executions["executions"][1]["error_message"])
+        self.assertGreaterEqual(len(recent_notifications["notifications"]), 2)
+        self.assertEqual(recent_notifications["notifications"][0]["category"], "execution_recovered")
+        self.assertEqual(recent_notifications["notifications"][0]["delivery_status"], "queued")
+        self.assertEqual(recent_notifications["notifications"][1]["category"], "execution_retry_scheduled")
+        self.assertTrue(outbox_path.exists())
+        self.assertGreaterEqual(len(outbox_path.read_text(encoding="utf-8").splitlines()), 2)
 
     def test_persist_backtest_run_stops_immediately_on_non_retryable_failure(self) -> None:
         """验证明确声明为不可重试的错误不会被运行控制器反复重试。"""
@@ -398,8 +427,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         csv_path = base_dir / "bars.csv"
         db_path = base_dir / "no-retry-test.duckdb"
         config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
         if db_path.exists():
             db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
 
         with csv_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
@@ -420,7 +452,13 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     }
                 )
 
-        self._write_config(config_path, db_path, max_retry_attempts=3)
+        self._write_config(
+            config_path,
+            db_path,
+            max_retry_attempts=3,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
         app = QuantTradeApp(str(config_path))
         app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
 
@@ -442,6 +480,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         recent_executions = app.recent_backtest_executions(limit=5)
         recent_request_chains = app.recent_execution_requests(limit=5)
         request_detail = app.execution_request_detail(request_id=recent_executions["executions"][0]["request_id"])
+        recent_notifications = app.recent_notification_events(limit=5)
 
         self.assertEqual(call_count["value"], 1)
         self.assertEqual(recent_executions["executions"][0]["status"], "failed")
@@ -453,6 +492,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_request_chains["requests"][0]["non_retryable_failure_count"], 1)
         self.assertEqual(recent_request_chains["requests"][0]["dominant_failure_class"], "NonRetryableExecutionError")
         self.assertEqual(request_detail["detail"]["request"]["health_label"], "critical")
+        self.assertEqual(recent_notifications["notifications"][0]["category"], "execution_final_failure")
+        self.assertEqual(recent_notifications["notifications"][0]["delivery_status"], "queued")
+        self.assertTrue(outbox_path.exists())
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""
@@ -460,8 +502,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         base_dir.mkdir(parents=True, exist_ok=True)
         db_path = base_dir / "blocked-test.duckdb"
         config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
         if db_path.exists():
             db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
 
         self._write_config(
             config_path,
@@ -469,6 +514,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
             max_retry_attempts=3,
             protection_mode_failure_threshold=2,
             skip_run_on_protection_mode=True,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
         )
         app = QuantTradeApp(str(config_path))
 
@@ -496,6 +543,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         recent_executions = app.recent_backtest_executions(limit=5)
         recent_request_chains = app.recent_execution_requests(limit=5)
         request_detail = app.execution_request_detail(request_id=blocked_result["request_id"])
+        recent_notifications = app.recent_notification_events(limit=5)
 
         self.assertEqual(blocked_result["status"], "blocked")
         self.assertIsNone(blocked_result["run_id"])
@@ -515,6 +563,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_executions["executions"][0]["status"], "blocked")
         self.assertTrue(recent_executions["executions"][0]["protection_mode"])
         self.assertEqual(recent_executions["executions"][0]["failure_class"], "ProtectionMode")
+        self.assertEqual(recent_notifications["notifications"][0]["category"], "execution_blocked")
+        self.assertEqual(recent_notifications["notifications"][0]["delivery_status"], "queued")
+        self.assertTrue(outbox_path.exists())
 
     def test_retry_backoff_uses_exponential_strategy_and_cap(self) -> None:
         """验证退避计算支持指数增长，并会被最大等待时间封顶。"""
@@ -600,8 +651,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         csv_path = base_dir / "bars.csv"
         db_path = base_dir / "cooldown-expired.duckdb"
         config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
         if db_path.exists():
             db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
 
         with csv_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
@@ -628,6 +682,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
             protection_mode_failure_threshold=2,
             protection_mode_cooldown_seconds=300,
             skip_run_on_protection_mode=True,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
         )
         app = QuantTradeApp(str(config_path))
         app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
@@ -670,6 +726,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
 
         persist_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
         protection_status = app.protection_status(symbol="AAPL", timeframe="1d")
+        recent_notifications = app.recent_notification_events(limit=5)
 
         self.assertEqual(persist_result["status"], "completed")
         self.assertFalse(persist_result["execution"]["protection_mode"])
@@ -677,6 +734,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertTrue(persist_result["execution"]["protection_cooldown_until"])
         self.assertFalse(protection_status["protection"]["active"])
         self.assertEqual(protection_status["protection"]["latest_execution_status"], "completed")
+        self.assertEqual(recent_notifications["notifications"][0]["category"], "protection_resumed")
+        self.assertTrue(outbox_path.exists())
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""

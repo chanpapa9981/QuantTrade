@@ -57,6 +57,8 @@ class NotificationConfig:
 
     provider: str = "telegram"
     enabled: bool = False
+    min_level: str = "warning"
+    outbox_path: str = "var/notifications/outbox.jsonl"
 
 
 @dataclass(slots=True)

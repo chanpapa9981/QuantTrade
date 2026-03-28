@@ -74,6 +74,9 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Cooldown Active", html)
         self.assertIn("Retry Scheduled", html)
         self.assertIn("Top Failure Class", html)
+        self.assertIn("Notifications", html)
+        self.assertIn("Critical Alerts", html)
+        self.assertIn("Queued Alerts", html)
         self.assertIn("Execution Requests", html)
         self.assertIn("Request Anomalies", html)
         self.assertIn("Recent Executions", html)
@@ -111,6 +114,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("navigator.clipboard", html)
         self.assertIn("window.location.hash", html)
         self.assertIn("Recent Orders", html)
+        self.assertIn("Recent Notifications", html)
         self.assertIn("Recent Audit Events", html)
 
 

@@ -30,6 +30,7 @@ from quanttrade.data.repository import BacktestRunRepository, BarRepository
 from quanttrade.data.schema import create_schema
 from quanttrade.data.storage import database_lock, ensure_data_dirs, execution_lock
 from quanttrade.execution.simulator import SimulatedExecutionEngine
+from quanttrade.notification.service import append_notification_to_outbox, should_emit_notification
 from quanttrade.risk.engine import RiskEngine
 from quanttrade.strategies.atr_dtf import AtrDynamicTrendFollowingStrategy
 
@@ -61,6 +62,7 @@ class QuantTradeApp:
             "data_path": self.settings.data.duckdb_path,
             "data_backend": self.settings.data.backend,
             "execution": asdict(self.settings.execution),
+            "notification": asdict(self.settings.notification),
         }
 
     def run_sample(self) -> dict[str, object]:
@@ -177,6 +179,68 @@ class QuantTradeApp:
             return min(delay, capped_max)
         return delay
 
+    def _record_notification(
+        self,
+        *,
+        severity: str,
+        category: str,
+        title: str,
+        message: str,
+        symbol: str = "",
+        timeframe: str = "",
+        run_id: str = "",
+        execution_id: str = "",
+        request_id: str = "",
+    ) -> dict[str, object]:
+        """记录一条通知事件，并在满足规则时写入本地 outbox。
+
+        这里的设计故意偏“骨架化”：
+        - 不直接耦合 Telegram SDK；
+        - 先把事件写入数据库和 JSONL outbox；
+        - 后续真正接外部服务时，只需要消费 outbox。
+        """
+        delivery_status = "suppressed"
+        delivery_target = ""
+        if self.settings.notification.enabled and should_emit_notification(self.settings.notification, severity):
+            outbox_payload = {
+                "severity": severity,
+                "category": category,
+                "title": title,
+                "message": message,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "run_id": run_id,
+                "execution_id": execution_id,
+                "request_id": request_id,
+                "provider": self.settings.notification.provider,
+            }
+            delivery_target = append_notification_to_outbox(self.settings.notification, outbox_payload)
+            delivery_status = "queued"
+        elif self.settings.notification.enabled:
+            delivery_status = "filtered"
+
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            event_id = repository.save_notification_event(
+                severity=severity,
+                category=category,
+                title=title,
+                message=message,
+                provider=self.settings.notification.provider,
+                delivery_status=delivery_status,
+                delivery_target=delivery_target,
+                symbol=symbol,
+                timeframe=timeframe,
+                run_id=run_id,
+                execution_id=execution_id,
+                request_id=request_id,
+            )
+        return {
+            "event_id": event_id,
+            "delivery_status": delivery_status,
+            "delivery_target": delivery_target,
+        }
+
     def persist_backtest_run(
         self,
         symbol: str,
@@ -238,6 +302,16 @@ class QuantTradeApp:
                         execution_id,
                         execution.get("protection_reason", ""),
                     )
+                    self._record_notification(
+                        severity="warning",
+                        category="protection_resumed",
+                        title="Backtest resumed after protection cooldown",
+                        message=str(execution.get("protection_reason", "")),
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        execution_id=execution_id,
+                        request_id=request_id,
+                    )
                 if execution.get("protection_mode") and skip_run_on_protection_mode:
                     LOGGER.warning(
                         "blocking backtest request_id=%s execution_id=%s because protection mode is active: %s",
@@ -251,6 +325,16 @@ class QuantTradeApp:
                             execution_id=execution_id,
                             reason=str(execution.get("protection_reason") or "blocked by protection mode"),
                         )
+                    self._record_notification(
+                        severity="critical",
+                        category="execution_blocked",
+                        title="Backtest blocked by protection mode",
+                        message=str(execution.get("protection_reason") or "blocked by protection mode"),
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        execution_id=execution_id,
+                        request_id=request_id,
+                    )
                     latest_execution = self.execution_detail(execution_id=execution_id)["detail"]
                     return {
                         "status": "blocked",
@@ -291,6 +375,21 @@ class QuantTradeApp:
                         run_id,
                         attempts_used,
                     )
+                    if attempts_used > 1:
+                        self._record_notification(
+                            severity="warning",
+                            category="execution_recovered",
+                            title="Backtest succeeded after retry",
+                            message=(
+                                f"request {request_id} completed after {attempts_used} attempts; "
+                                f"final run_id={run_id}"
+                            ),
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            run_id=run_id,
+                            execution_id=execution_id,
+                            request_id=request_id,
+                        )
                     break
                 except Exception as exc:
                     error_meta = self._classify_execution_error(exc)
@@ -307,6 +406,19 @@ class QuantTradeApp:
                             failure_class=str(error_meta["failure_class"]),
                         )
                     if retry_decision == "retry_scheduled":
+                        self._record_notification(
+                            severity="warning",
+                            category="execution_retry_scheduled",
+                            title="Backtest retry scheduled",
+                            message=(
+                                f"request {request_id} execution {execution_id} will retry after "
+                                f"{error_meta['failure_class']}: {last_error}"
+                            ),
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            execution_id=execution_id,
+                            request_id=request_id,
+                        )
                         backoff_seconds = self._compute_retry_backoff_seconds(attempts_used)
                         LOGGER.warning(
                             "retrying persisted backtest request_id=%s execution_id=%s after retryable failure class=%s attempt=%s/%s strategy=%s backoff_seconds=%.3f reason=%s",
@@ -331,6 +443,19 @@ class QuantTradeApp:
                         attempts_used,
                         max_retry_attempts,
                         last_error,
+                    )
+                    self._record_notification(
+                        severity="critical",
+                        category="execution_final_failure",
+                        title="Backtest execution failed",
+                        message=(
+                            f"request {request_id} execution {execution_id} stopped after "
+                            f"{error_meta['failure_class']}: {last_error}"
+                        ),
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        execution_id=execution_id,
+                        request_id=request_id,
                     )
                     if attempts_used >= max_retry_attempts or not retryable:
                         raise
@@ -412,6 +537,12 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"audit_events": repository.fetch_recent_audit_events(limit=limit)}
 
+    def recent_notification_events(self, limit: int = 20) -> dict[str, object]:
+        """查询最近通知事件，确认哪些关键运行事件已被提升成告警。"""
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"notifications": repository.fetch_recent_notification_events(limit=limit)}
+
     def dashboard_history(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, object]:
         """把历史数据整理成前端更容易消费的结构。"""
         with database_lock(self.settings.data.duckdb_path):
@@ -422,6 +553,7 @@ class QuantTradeApp:
                 bundle["executions"],
                 bundle["orders"],
                 bundle["audit_events"],
+                bundle["notification_events"],
             )
 
     def export_backtest(
@@ -510,4 +642,5 @@ class QuantTradeApp:
             "executions": len(payload["recent_executions"]),
             "orders": len(payload["recent_orders"]),
             "audit_events": len(payload["recent_audit_events"]),
+            "notifications": len(payload["recent_notifications"]),
         }

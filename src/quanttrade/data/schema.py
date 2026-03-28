@@ -73,6 +73,23 @@ def create_schema(db_path: str) -> None:
                 risk_allowed INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS notification_events (
+                event_id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                delivery_status TEXT NOT NULL,
+                delivery_target TEXT NOT NULL DEFAULT '',
+                symbol TEXT NOT NULL DEFAULT '',
+                timeframe TEXT NOT NULL DEFAULT '',
+                run_id TEXT NOT NULL DEFAULT '',
+                execution_id TEXT NOT NULL DEFAULT '',
+                request_id TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE TABLE IF NOT EXISTS account_snapshots (
                 run_id TEXT NOT NULL,
                 recorded_at TEXT NOT NULL,
@@ -116,6 +133,12 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS remaining_quantity INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS broker_status TEXT DEFAULT '';")
         connection.execute("ALTER TABLE order_events ADD COLUMN IF NOT EXISTS status_detail TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS delivery_target TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS symbol TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS timeframe TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS run_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS execution_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS request_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS request_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS attempt_number INTEGER DEFAULT 1;")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS recovered_execution_count INTEGER DEFAULT 0;")
