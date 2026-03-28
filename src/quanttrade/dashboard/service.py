@@ -371,6 +371,14 @@ def build_history_payload(
                     if item.get("delivery_status") in {"delivery_failed_retryable", "delivery_failed_final"}
                 ]
             ),
+            "scheduled_retry_notifications": len(
+                [
+                    item
+                    for item in notification_events
+                    if item.get("delivery_status") == "delivery_failed_retryable"
+                    and str(item.get("next_delivery_attempt_at", "")).strip()
+                ]
+            ),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),

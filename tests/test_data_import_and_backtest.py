@@ -36,6 +36,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         notification_outbox_path: str = "var/notifications/test-outbox.jsonl",
         notification_delivery_log_path: str = "var/notifications/test-delivery-log.jsonl",
         notification_max_delivery_attempts: int = 3,
+        notification_delivery_retry_backoff_seconds: float = 0.0,
+        notification_delivery_retry_backoff_strategy: str = "linear",
+        notification_delivery_retry_backoff_multiplier: float = 2.0,
+        notification_max_delivery_retry_backoff_seconds: float = 300.0,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -69,6 +73,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  outbox_path: {notification_outbox_path}",
                     f"  delivery_log_path: {notification_delivery_log_path}",
                     f"  max_delivery_attempts: {notification_max_delivery_attempts}",
+                    f"  delivery_retry_backoff_seconds: {notification_delivery_retry_backoff_seconds}",
+                    f"  delivery_retry_backoff_strategy: {notification_delivery_retry_backoff_strategy}",
+                    f"  delivery_retry_backoff_multiplier: {notification_delivery_retry_backoff_multiplier}",
+                    f"  max_delivery_retry_backoff_seconds: {notification_max_delivery_retry_backoff_seconds}",
                 ]
             ),
             encoding="utf-8",
@@ -227,6 +235,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("pending_notifications", history_payload["history_summary"])
         self.assertIn("dispatched_notifications", history_payload["history_summary"])
         self.assertIn("failed_notifications", history_payload["history_summary"])
+        self.assertIn("scheduled_retry_notifications", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
 
@@ -555,6 +564,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(after_delivery["notifications"][0]["delivery_attempts"], 1)
         self.assertTrue(after_delivery["notifications"][0]["delivered_at"])
         self.assertEqual(after_delivery["notifications"][0]["last_error"], "")
+        self.assertEqual(after_delivery["notifications"][0]["next_delivery_attempt_at"], "")
         self.assertEqual(history_payload["history_summary"]["dispatched_notifications"], 1)
         self.assertEqual(history_payload["history_summary"]["pending_notifications"], 0)
         self.assertTrue(outbox_path.exists())
@@ -586,6 +596,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
             notification_outbox_path=str(outbox_path),
             notification_delivery_log_path=str(delivery_log_path),
             notification_max_delivery_attempts=2,
+            notification_delivery_retry_backoff_seconds=60.0,
         )
         app = QuantTradeApp(str(config_path))
         app._record_notification(
@@ -602,6 +613,21 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         first_delivery = app.deliver_notifications(limit=5)
         after_first = app.recent_notification_events(limit=5)
         first_history = app.dashboard_history(runs_limit=5, events_limit=5)
+        blocked_second_delivery = app.deliver_notifications(limit=5)
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET next_delivery_attempt_at = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", after_first["notifications"][0]["event_id"]),
+            )
+        finally:
+            connection.close()
+
         second_delivery = app.deliver_notifications(limit=5)
         after_second = app.recent_notification_events(limit=5)
         second_history = app.dashboard_history(runs_limit=5, events_limit=5)
@@ -612,8 +638,13 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(after_first["notifications"][0]["delivery_status"], "delivery_failed_retryable")
         self.assertEqual(after_first["notifications"][0]["delivery_attempts"], 1)
         self.assertIn("simulated notification adapter failure", after_first["notifications"][0]["last_error"])
+        self.assertTrue(after_first["notifications"][0]["next_delivery_attempt_at"])
         self.assertEqual(first_history["history_summary"]["pending_notifications"], 1)
         self.assertEqual(first_history["history_summary"]["failed_notifications"], 1)
+        self.assertEqual(first_history["history_summary"]["scheduled_retry_notifications"], 1)
+
+        self.assertEqual(blocked_second_delivery["processed"], 0)
+        self.assertEqual(blocked_second_delivery["remaining_pending"], 0)
 
         self.assertEqual(second_delivery["processed"], 1)
         self.assertEqual(second_delivery["failed_retryable"], 0)
@@ -622,8 +653,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(after_second["notifications"][0]["delivery_status"], "delivery_failed_final")
         self.assertEqual(after_second["notifications"][0]["delivery_attempts"], 2)
         self.assertIn("simulated notification adapter failure", after_second["notifications"][0]["last_error"])
+        self.assertEqual(after_second["notifications"][0]["next_delivery_attempt_at"], "")
         self.assertEqual(second_history["history_summary"]["pending_notifications"], 0)
         self.assertEqual(second_history["history_summary"]["failed_notifications"], 1)
+        self.assertEqual(second_history["history_summary"]["scheduled_retry_notifications"], 0)
         self.assertFalse(delivery_log_path.exists())
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
@@ -717,6 +750,27 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(app._compute_retry_backoff_seconds(1), 1.5)
         self.assertEqual(app._compute_retry_backoff_seconds(2), 4.5)
         self.assertEqual(app._compute_retry_backoff_seconds(3), 10.0)
+
+    def test_notification_delivery_backoff_uses_exponential_strategy_and_cap(self) -> None:
+        """验证通知重投也支持独立的指数退避和最大等待时间封顶。"""
+        base_dir = Path("var/test-artifacts/notification-backoff")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-backoff.duckdb"
+        config_path = base_dir / "settings.yaml"
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_delivery_retry_backoff_seconds=2.0,
+            notification_delivery_retry_backoff_strategy="exponential",
+            notification_delivery_retry_backoff_multiplier=3.0,
+            notification_max_delivery_retry_backoff_seconds=10.0,
+        )
+        app = QuantTradeApp(str(config_path))
+
+        self.assertEqual(app._compute_notification_delivery_backoff_seconds(1), 2.0)
+        self.assertEqual(app._compute_notification_delivery_backoff_seconds(2), 6.0)
+        self.assertEqual(app._compute_notification_delivery_backoff_seconds(3), 10.0)
 
     def test_execution_enters_cooldown_based_protection_mode(self) -> None:
         """验证连续失败达到阈值且仍在冷却窗口内时，新 execution 会带上 cooldown 信息。"""

@@ -108,6 +108,7 @@
 | W-055 | 稳定性 / CLI / Dashboard | 增加保护模式冷却恢复与状态查询 | 支持冷却窗口、自动恢复、`protection-status` 命令、cooldown 可视化 | 已完成 |
 | W-056 | 通知 / Dashboard / CLI | 增加本地通知事件与 outbox 骨架 | 支持 notification_events、`notifications` 命令、history 告警面板和 JSONL outbox | 已完成 |
 | W-057 | 通知 / Dashboard / CLI | 增加通知投递 worker 状态机 | 支持 `notifications-deliver`、投递尝试次数/失败原因/adapter dispatch log、history 告警状态筛选与统计 | 已完成 |
+| W-058 | 通知 / Dashboard | 增加通知重投退避时间窗 | 支持 `next_delivery_attempt_at`、通知独立退避策略、history `Next Try` 展示和延后重投 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -744,6 +745,18 @@
 | 为什么这么做 | 因为真正的通知系统不是“把事件写进 outbox 就结束了”，而是要回答三个更实际的问题：这条告警有没有被 worker 接手、worker 试了几次、最终到底发成了还是放弃了。先把这个内层状态机做扎实，后面接 Telegram/微信时才能稳稳地替换 adapter，而不是重新改一遍整条业务链。 |
 | 未完成 | 真实 Telegram/微信 provider、按渠道配置 target、投递去重、批量聚合、静默窗口、定时 worker |
 | 备注 | 这一轮把通知层从“有告警事件”推进成了“有投递推进过程和失败闭环的运维骨架” |
+
+### 2026-03-28 第 41 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让通知重投不再是“立刻反复重撞”，而是具备独立的退避时间窗和“下一次最早何时再试”的可见性 |
+| 输入 | 已有通知 worker、投递尝试次数和失败原因，但失败后还缺少重投节奏控制，也看不到哪条通知暂时不该再试 |
+| 产出 | `delivery_retry_backoff_seconds` / `delivery_retry_backoff_strategy` / `delivery_retry_backoff_multiplier` / `max_delivery_retry_backoff_seconds` 配置；`next_delivery_attempt_at` 字段；通知 worker 的延后重投逻辑；history 页 `Retrying Alerts` 卡片和 `Next Try` 列；对应测试 |
+| 结果 | 现在通知在 adapter 失败后，不会无脑立刻再次处理，而是会带着 `next_delivery_attempt_at` 进入下一轮等待；只有到了允许的时间点，worker 才会重新接手这条告警 |
+| 为什么这么做 | 因为通知渠道的失败通常和交易任务失败不是一回事。交易任务可能需要尽快再试，但通知渠道如果瞬时异常，立刻重复撞击往往只会制造更多噪音。给通知系统单独加上退避时间窗，才能让告警链路既可恢复，又不会把自己变成新的噪音源。 |
+| 未完成 | 真实定时 worker、按 provider 区分退避策略、静默窗口、聚合压缩、外部渠道确认回执 |
+| 备注 | 这一轮把通知层从“会失败重试”推进成了“有节奏地延后重投”的更真实运维骨架 |
 
 ---
 

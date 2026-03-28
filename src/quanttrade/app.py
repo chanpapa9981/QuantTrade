@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from quanttrade.audit.logger import configure_logging
@@ -177,6 +177,34 @@ class QuantTradeApp:
             delay = base_delay * (multiplier ** max(normalized_attempt - 1, 0))
         else:
             # 任何未知策略都退回线性模式，保证控制流可预测，而不是因为拼写问题直接失效。
+            delay = base_delay * normalized_attempt
+
+        if capped_max > 0:
+            return min(delay, capped_max)
+        return delay
+
+    def _compute_notification_delivery_backoff_seconds(self, attempt_number: int) -> float:
+        """根据通知配置计算下一次最早允许重投的等待时间。
+
+        这里和 execution retry 的思路一致，但服务对象不同：
+        - execution retry 面向“任务本身还能不能继续跑”；
+        - notification retry 面向“告警有没有必要立刻再撞一次渠道”。
+
+        把两者拆开配置，是为了避免出现这种情况：
+        回测任务适合快重试，但通知渠道反而需要更慢、更克制的重投节奏。
+        """
+        base_delay = max(float(self.settings.notification.delivery_retry_backoff_seconds), 0.0)
+        if base_delay <= 0:
+            return 0.0
+
+        strategy = str(self.settings.notification.delivery_retry_backoff_strategy or "linear").strip().lower()
+        multiplier = max(float(self.settings.notification.delivery_retry_backoff_multiplier), 1.0)
+        capped_max = max(float(self.settings.notification.max_delivery_retry_backoff_seconds), 0.0)
+        normalized_attempt = max(int(attempt_number), 1)
+
+        if strategy == "exponential":
+            delay = base_delay * (multiplier ** max(normalized_attempt - 1, 0))
+        else:
             delay = base_delay * normalized_attempt
 
         if capped_max > 0:
@@ -595,6 +623,7 @@ class QuantTradeApp:
                         delivery_target=delivery_target,
                         delivered_at=datetime.now(timezone.utc).isoformat(),
                         last_error="",
+                        next_delivery_attempt_at="",
                         increment_attempts=True,
                     )
                 dispatched += 1
@@ -605,6 +634,12 @@ class QuantTradeApp:
                     if attempt_number >= max_delivery_attempts
                     else "delivery_failed_retryable"
                 )
+                retry_backoff_seconds = self._compute_notification_delivery_backoff_seconds(attempt_number)
+                next_delivery_attempt_at = ""
+                if next_status == "delivery_failed_retryable":
+                    next_delivery_attempt_at = (
+                        datetime.now(timezone.utc) + timedelta(seconds=retry_backoff_seconds)
+                    ).isoformat()
                 with database_lock(self.settings.data.duckdb_path):
                     repository = BacktestRunRepository(self.settings.data.duckdb_path)
                     repository.mark_notification_delivery_result(
@@ -613,6 +648,7 @@ class QuantTradeApp:
                         delivery_target=str(event.get("delivery_target", "")),
                         delivered_at="",
                         last_error=last_error,
+                        next_delivery_attempt_at=next_delivery_attempt_at,
                         increment_attempts=True,
                     )
                 if next_status == "delivery_failed_final":
@@ -628,11 +664,13 @@ class QuantTradeApp:
                 else:
                     failed_retryable += 1
                     LOGGER.warning(
-                        "notification delivery failed but remains retryable event_id=%s provider=%s attempt=%s/%s reason=%s",
+                        "notification delivery failed but remains retryable event_id=%s provider=%s attempt=%s/%s backoff_seconds=%.3f next_delivery_attempt_at=%s reason=%s",
                         event_id,
                         event.get("provider", ""),
                         attempt_number,
                         max_delivery_attempts,
+                        retry_backoff_seconds,
+                        next_delivery_attempt_at,
                         last_error,
                     )
 

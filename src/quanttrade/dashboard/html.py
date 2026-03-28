@@ -1173,6 +1173,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Title</th>
                   <th>Status</th>
                   <th>Attempts</th>
+                  <th>Next Try</th>
                   <th>Provider</th>
                   <th>Last Error</th>
                   <th>Execution</th>
@@ -1328,6 +1329,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Pending Alerts", value: summary.pending_notifications }},
         {{ label: "Dispatched Alerts", value: summary.dispatched_notifications }},
         {{ label: "Failed Alerts", value: summary.failed_notifications }},
+        {{ label: "Retrying Alerts", value: summary.scheduled_retry_notifications }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
@@ -1665,11 +1667,12 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{event.title}}</td>
           <td>${{event.delivery_status}}</td>
           <td>${{fmt(event.delivery_attempts ?? 0)}}</td>
+          <td>${{event.next_delivery_attempt_at || ""}}</td>
           <td>${{event.provider}}</td>
           <td>${{event.last_error || ""}}</td>
           <td>${{event.execution_id || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="9" class="muted">No notification events in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="10" class="muted">No notification events in the current view.</td></tr>';
     }}
     async function copyCurrentLink() {{
       // 优先用浏览器剪贴板 API；如果环境不支持，就退化成 prompt。

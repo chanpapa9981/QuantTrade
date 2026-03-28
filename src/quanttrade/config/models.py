@@ -61,6 +61,10 @@ class NotificationConfig:
     outbox_path: str = "var/notifications/outbox.jsonl"
     delivery_log_path: str = "var/notifications/delivery-log.jsonl"
     max_delivery_attempts: int = 3
+    delivery_retry_backoff_seconds: float = 0.0
+    delivery_retry_backoff_strategy: str = "linear"
+    delivery_retry_backoff_multiplier: float = 2.0
+    max_delivery_retry_backoff_seconds: float = 300.0
 
 
 @dataclass(slots=True)

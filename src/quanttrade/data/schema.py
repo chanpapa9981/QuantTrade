@@ -86,6 +86,7 @@ def create_schema(db_path: str) -> None:
                 delivery_attempts INTEGER NOT NULL DEFAULT 0,
                 delivered_at TEXT NOT NULL DEFAULT '',
                 last_error TEXT NOT NULL DEFAULT '',
+                next_delivery_attempt_at TEXT NOT NULL DEFAULT '',
                 symbol TEXT NOT NULL DEFAULT '',
                 timeframe TEXT NOT NULL DEFAULT '',
                 run_id TEXT NOT NULL DEFAULT '',
@@ -140,6 +141,7 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS delivery_attempts INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS delivered_at TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS next_delivery_attempt_at TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS symbol TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS timeframe TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS run_id TEXT DEFAULT '';")

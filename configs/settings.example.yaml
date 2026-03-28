@@ -48,3 +48,7 @@ notification:
   outbox_path: var/notifications/outbox.jsonl
   delivery_log_path: var/notifications/delivery-log.jsonl
   max_delivery_attempts: 3
+  delivery_retry_backoff_seconds: 0.0
+  delivery_retry_backoff_strategy: linear
+  delivery_retry_backoff_multiplier: 2.0
+  max_delivery_retry_backoff_seconds: 300.0

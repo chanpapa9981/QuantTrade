@@ -543,6 +543,7 @@ class BacktestRunRepository:
         delivery_attempts: int = 0,
         delivered_at: str = "",
         last_error: str = "",
+        next_delivery_attempt_at: str = "",
         symbol: str = "",
         timeframe: str = "",
         run_id: str = "",
@@ -557,14 +558,18 @@ class BacktestRunRepository:
         connection = connect_database(self.db_path)
         event_id = str(uuid4())
         created_at = datetime.now(UTC).isoformat()
+        scheduled_next_attempt = next_delivery_attempt_at[:40]
+        if not scheduled_next_attempt and delivery_status == "queued":
+            # 新事件进入队列后，默认就应该立刻可投递，所以这里把“下一次可尝试时间”设成创建时刻。
+            scheduled_next_attempt = created_at
         try:
             connection.execute(
                 """
                 INSERT INTO notification_events (
                     event_id, timestamp, severity, category, title, message,
-                    provider, delivery_status, delivery_target, delivery_attempts, delivered_at, last_error,
+                    provider, delivery_status, delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                     symbol, timeframe, run_id, execution_id, request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -579,6 +584,7 @@ class BacktestRunRepository:
                     max(int(delivery_attempts), 0),
                     delivered_at[:40],
                     last_error[:500],
+                    scheduled_next_attempt,
                     symbol[:40],
                     timeframe[:20],
                     run_id[:80],
@@ -600,7 +606,7 @@ class BacktestRunRepository:
             rows = connection.execute(
                 """
                 SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
-                       delivery_target, delivery_attempts, delivered_at, last_error,
+                       delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 ORDER BY timestamp DESC
@@ -624,11 +630,12 @@ class BacktestRunRepository:
                 "delivery_attempts": row[9],
                 "delivered_at": row[10],
                 "last_error": row[11],
-                "symbol": row[12],
-                "timeframe": row[13],
-                "run_id": row[14],
-                "execution_id": row[15],
-                "request_id": row[16],
+                "next_delivery_attempt_at": row[12],
+                "symbol": row[13],
+                "timeframe": row[14],
+                "run_id": row[15],
+                "execution_id": row[16],
+                "request_id": row[17],
             }
             for row in rows
         ]
@@ -648,15 +655,16 @@ class BacktestRunRepository:
             rows = connection.execute(
                 """
                 SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
-                       delivery_target, delivery_attempts, delivered_at, last_error,
+                       delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 WHERE delivery_status IN ('queued', 'delivery_failed_retryable')
                   AND delivery_attempts < ?
+                  AND (next_delivery_attempt_at = '' OR next_delivery_attempt_at <= ?)
                 ORDER BY timestamp ASC
                 LIMIT ?
                 """,
-                (max(int(max_delivery_attempts), 1), limit),
+                (max(int(max_delivery_attempts), 1), datetime.now(UTC).isoformat(), limit),
             ).fetchall()
         finally:
             connection.close()
@@ -674,11 +682,12 @@ class BacktestRunRepository:
                 "delivery_attempts": row[9],
                 "delivered_at": row[10],
                 "last_error": row[11],
-                "symbol": row[12],
-                "timeframe": row[13],
-                "run_id": row[14],
-                "execution_id": row[15],
-                "request_id": row[16],
+                "next_delivery_attempt_at": row[12],
+                "symbol": row[13],
+                "timeframe": row[14],
+                "run_id": row[15],
+                "execution_id": row[16],
+                "request_id": row[17],
             }
             for row in rows
         ]
@@ -691,6 +700,7 @@ class BacktestRunRepository:
         delivery_target: str = "",
         delivered_at: str = "",
         last_error: str = "",
+        next_delivery_attempt_at: str = "",
         increment_attempts: bool = True,
     ) -> None:
         """记录通知 worker 的处理结果。
@@ -707,6 +717,7 @@ class BacktestRunRepository:
                     delivery_target = ?,
                     delivered_at = ?,
                     last_error = ?,
+                    next_delivery_attempt_at = ?,
                     delivery_attempts = delivery_attempts + ?
                 WHERE event_id = ?
                 """,
@@ -715,6 +726,7 @@ class BacktestRunRepository:
                     delivery_target[:300],
                     delivered_at[:40],
                     last_error[:500],
+                    next_delivery_attempt_at[:40],
                     1 if increment_attempts else 0,
                     event_id[:80],
                 ),
@@ -1488,7 +1500,7 @@ class BacktestRunRepository:
                 notification_rows = connection.execute(
                     """
                     SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
-                           delivery_target, delivery_attempts, delivered_at, last_error,
+                           delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                            symbol, timeframe, run_id, execution_id, request_id
                     FROM notification_events
                     ORDER BY timestamp DESC
@@ -1510,11 +1522,12 @@ class BacktestRunRepository:
                         "delivery_attempts": row[9],
                         "delivered_at": row[10],
                         "last_error": row[11],
-                        "symbol": row[12],
-                        "timeframe": row[13],
-                        "run_id": row[14],
-                        "execution_id": row[15],
-                        "request_id": row[16],
+                        "next_delivery_attempt_at": row[12],
+                        "symbol": row[13],
+                        "timeframe": row[14],
+                        "run_id": row[15],
+                        "execution_id": row[16],
+                        "request_id": row[17],
                     }
                     for row in notification_rows
                 ]

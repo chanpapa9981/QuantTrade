@@ -80,6 +80,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Pending Alerts", html)
         self.assertIn("Dispatched Alerts", html)
         self.assertIn("Failed Alerts", html)
+        self.assertIn("Retrying Alerts", html)
         self.assertIn("Execution Requests", html)
         self.assertIn("Request Anomalies", html)
         self.assertIn("Recent Executions", html)
@@ -120,6 +121,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Recent Orders", html)
         self.assertIn("Recent Notifications", html)
         self.assertIn("Attempts", html)
+        self.assertIn("Next Try", html)
         self.assertIn("Last Error", html)
         self.assertIn("Recent Audit Events", html)
 
