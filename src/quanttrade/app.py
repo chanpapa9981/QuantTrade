@@ -652,6 +652,11 @@ class QuantTradeApp:
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
         return {"summary": history_payload["notification_summary"]}
 
+    def notification_owner_summary(self, limit: int = 50) -> dict[str, object]:
+        """按负责人汇总最近通知事件，方便看 owner 当前负载。"""
+        history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
+        return {"summary": history_payload["notification_owner_summary"]}
+
     def acknowledge_notification(self, event_id: str, note: str = "") -> dict[str, object]:
         """确认某条通知已经被人查看或处理过。"""
         with database_lock(self.settings.data.duckdb_path):

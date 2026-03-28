@@ -149,6 +149,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         recent_audit = app.recent_audit_events(limit=5)
         recent_notifications = app.recent_notification_events(limit=5)
         notification_summary = app.notification_summary(limit=5)
+        notification_owner_summary = app.notification_owner_summary(limit=5)
         history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
 
         self.assertEqual(import_result["rows_inserted"], 30)
@@ -223,6 +224,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(recent_audit["audit_events"]), 1)
         self.assertEqual(len(recent_notifications["notifications"]), 0)
         self.assertIn("summary", notification_summary)
+        self.assertIn("summary", notification_owner_summary)
         self.assertIn("history_summary", history_payload)
         self.assertIn("recent_executions", history_payload)
         self.assertIn("execution_requests", history_payload)
@@ -254,6 +256,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("escalated_unassigned_notifications", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
+        self.assertIn("notification_owner_summary", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""
@@ -1031,6 +1034,71 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(before_assign["history_summary"]["escalated_unassigned_notifications"], 1)
         self.assertEqual(after_assign["history_summary"]["escalated_notifications"], 1)
         self.assertEqual(after_assign["history_summary"]["escalated_unassigned_notifications"], 0)
+
+    def test_notification_owner_summary_groups_owner_load(self) -> None:
+        """验证 owner 汇总可以看出谁手上还有多少未确认或已升级告警。"""
+        base_dir = Path("var/test-artifacts/notification-owner-summary")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-owner-summary.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_escalation_window_seconds=60,
+        )
+        app = QuantTradeApp(str(config_path))
+        first = app._record_notification(
+            severity="critical",
+            category="execution_final_failure",
+            title="Backtest execution failed",
+            message="owner summary critical",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        second = app._record_notification(
+            severity="warning",
+            category="execution_retry_scheduled",
+            title="Backtest retry scheduled",
+            message="owner summary warning",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET timestamp = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", first["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        app.escalate_notifications(limit=10)
+        app.assign_notification(event_id=first["event_id"], owner="ops.alice", note="critical queue")
+        summary_rows = app.notification_owner_summary(limit=10)["summary"]
+
+        owner_row = next(row for row in summary_rows if row["owner"] == "ops.alice")
+        unassigned_row = next(row for row in summary_rows if row["owner"] == "(unassigned)")
+
+        self.assertEqual(owner_row["event_count"], 1)
+        self.assertEqual(owner_row["unacknowledged_count"], 1)
+        self.assertEqual(owner_row["escalated_count"], 1)
+        self.assertEqual(owner_row["open_high_priority_count"], 1)
+        self.assertEqual(unassigned_row["event_count"], 1)
+        self.assertEqual(unassigned_row["unacknowledged_count"], 1)
+        self.assertEqual(unassigned_row["escalated_count"], 0)
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

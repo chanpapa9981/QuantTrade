@@ -73,6 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     notifications_parser.add_argument("--limit", type=int, default=20, help="Number of notification events to list")
     notification_summary_parser = subparsers.add_parser("notification-summary", help="Show aggregated notification summary rows")
     notification_summary_parser.add_argument("--limit", type=int, default=50, help="Number of recent notification events to aggregate")
+    notification_owner_summary_parser = subparsers.add_parser("notification-owner-summary", help="Show aggregated notification owner workload rows")
+    notification_owner_summary_parser.add_argument("--limit", type=int, default=50, help="Number of recent notification events to aggregate")
     notification_ack_parser = subparsers.add_parser("notification-ack", help="Mark one notification event as acknowledged")
     notification_ack_parser.add_argument("--event-id", required=True, help="Notification event id")
     notification_ack_parser.add_argument("--note", default="", help="Optional acknowledgement note")
@@ -229,6 +231,10 @@ def main() -> None:
 
     if args.command == "notification-summary":
         print(json.dumps(app.notification_summary(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notification-owner-summary":
+        print(json.dumps(app.notification_owner_summary(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "notification-ack":

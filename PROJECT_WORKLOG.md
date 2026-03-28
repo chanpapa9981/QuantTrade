@@ -113,6 +113,7 @@
 | W-060 | 通知 / Dashboard / CLI | 增加通知确认（ack）能力 | 支持 `notification-ack`、ack 时间/备注持久化、history 已确认/未确认统计与展示 | 已完成 |
 | W-061 | 通知 / Dashboard / CLI | 增加未确认告警升级标记 | 支持 `notification-escalate`、escalated_at/level/reason、history 升级统计与展示 | 已完成 |
 | W-062 | 通知 / Dashboard / CLI | 增加告警责任分派工作流 | 支持 `notification-assign`、assigned_to/assigned_at/assignment_note、history owner 过滤与责任统计 | 已完成 |
+| W-063 | 通知 / Dashboard / CLI | 增加 owner 负载汇总视图 | 支持 `notification-owner-summary`、按 owner 聚合未确认/升级/高优先级告警，以及 history `Notification Owners` 面板 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -809,6 +810,18 @@
 | 为什么这么做 | 因为值班闭环里真正容易掉链子的，不是“页面上没有状态”，而是“页面上有很多状态，却没人知道自己到底该接哪一条”。把 assignment 语义补进去后，系统才开始真正回答“这件事归谁”，而不是只停留在“这件事发生过、有人看过没有”。 |
 | 未完成 | 分派撤销、按班次/角色自动分派、批量分派、SLA 超时再升级、外部协作系统同步 |
 | 备注 | 这一轮把通知层从“可升级”推进成了“可归属、可协作”的更完整值班骨架 |
+
+### 2026-03-28 第 46 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 owner assignment 不只是写进单条告警，还能一眼看出“谁手上压了多少活” |
+| 输入 | 已有 assignment 字段和 owner 过滤，但还缺少一个汇总视角，导致 operator 仍要逐条翻通知表才能判断每个 owner 的当前负载 |
+| 产出 | `notification-owner-summary` CLI；按 owner 聚合的 `event_count` / `unacknowledged_count` / `escalated_count` / `open_high_priority_count`；history 页 `Notification Owners` 面板；对应测试 |
+| 结果 | 现在系统可以直接回答“ops.alice 手上还有多少未确认告警、多少已经升级、多少仍是高优先级未处理”，也能快速识别 `(unassigned)` 桶里是否还压着风险项 |
+| 为什么这么做 | 因为 assignment 解决的是“这件事归谁”，但值班管理还需要回答“这个人现在压了多少事”。只有把 owner 负载汇总出来，assignment 才真正从单条字段升级成可运营的工作视图。 |
+| 未完成 | 自动负载均衡分派、按班次/角色看 owner 汇总、owner 级 SLA、批量移交、外部值班系统同步 |
+| 备注 | 这一轮把通知层从“能分派责任”推进成了“能看责任负载”的更成熟协作视角 |
 
 ---
 

@@ -1187,6 +1187,26 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </section>
 
         <section class="panel">
+          <h2 class="panel-title">Notification Owners</h2>
+          <div class="panel-note">Who currently owns the alert queue and how much is still open</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Owner</th>
+                  <th>Events</th>
+                  <th>Unacked</th>
+                  <th>Escalated</th>
+                  <th>Open High</th>
+                  <th>Last Seen</th>
+                </tr>
+              </thead>
+              <tbody id="notification-owner-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Recent Notifications</h2>
           <div class="panel-note">Latest controller alerts and local delivery outcomes</div>
           <div class="table-wrap">
@@ -1698,6 +1718,43 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
     function renderNotifications() {{
+      function buildNotificationOwnerSummary(events) {{
+        const grouped = new Map();
+        events.forEach(event => {{
+          const owner = (event.assigned_to || "").trim() || "(unassigned)";
+          const row = grouped.get(owner) || {{
+            owner,
+            event_count: 0,
+            unacknowledged_count: 0,
+            escalated_count: 0,
+            open_high_priority_count: 0,
+            last_seen_at: "",
+          }};
+          row.event_count += 1;
+          if (!event.acknowledged_at) row.unacknowledged_count += 1;
+          if (event.escalated_at) row.escalated_count += 1;
+          if (!event.acknowledged_at && ["error", "critical"].includes(event.severity || "")) {{
+            row.open_high_priority_count += 1;
+          }}
+          if ((event.timestamp || "") > row.last_seen_at) {{
+            row.last_seen_at = event.timestamp || "";
+          }}
+          grouped.set(owner, row);
+        }});
+        return Array.from(grouped.values()).sort((left, right) => {{
+          if ((right.unacknowledged_count || 0) !== (left.unacknowledged_count || 0)) {{
+            return (right.unacknowledged_count || 0) - (left.unacknowledged_count || 0);
+          }}
+          if ((right.escalated_count || 0) !== (left.escalated_count || 0)) {{
+            return (right.escalated_count || 0) - (left.escalated_count || 0);
+          }}
+          if ((right.event_count || 0) !== (left.event_count || 0)) {{
+            return (right.event_count || 0) - (left.event_count || 0);
+          }}
+          return String(left.owner || "").localeCompare(String(right.owner || ""));
+        }});
+      }}
+
       const summaryRows = payload.notification_summary.filter(row => {{
         const matchingEvents = payload.recent_notifications.filter(event => {{
           if (state.runId !== "all" && event.run_id && event.run_id !== state.runId) return false;
@@ -1735,6 +1792,17 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         if (state.notificationOwner === "unassigned" && event.assigned_to) return false;
         return true;
       }});
+      const ownerRows = buildNotificationOwnerSummary(rows);
+      document.getElementById("notification-owner-table").innerHTML = ownerRows.length ? ownerRows.map(row => `
+        <tr>
+          <td>${{row.owner}}</td>
+          <td>${{fmt(row.event_count)}}</td>
+          <td>${{fmt(row.unacknowledged_count)}}</td>
+          <td>${{fmt(row.escalated_count)}}</td>
+          <td>${{fmt(row.open_high_priority_count)}}</td>
+          <td>${{row.last_seen_at || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="6" class="muted">No notification owner rows in the current view.</td></tr>';
       document.getElementById("notifications-table").innerHTML = rows.length ? rows.map(event => `
         <tr>
           <td>${{event.timestamp}}</td>

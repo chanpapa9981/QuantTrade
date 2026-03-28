@@ -171,6 +171,46 @@ def _build_notification_summary(notification_events: list[dict[str, object]]) ->
     return rows
 
 
+def _build_notification_owner_summary(notification_events: list[dict[str, object]]) -> list[dict[str, object]]:
+    """按负责人归并通知事件，帮助快速看 owner 负载。"""
+    grouped: dict[str, dict[str, object]] = {}
+    for event in notification_events:
+        owner = str(event.get("assigned_to", "")).strip() or "(unassigned)"
+        current = grouped.setdefault(
+            owner,
+            {
+                "owner": owner,
+                "event_count": 0,
+                "unacknowledged_count": 0,
+                "escalated_count": 0,
+                "open_high_priority_count": 0,
+                "last_seen_at": "",
+            },
+        )
+        current["event_count"] = int(current.get("event_count", 0)) + 1
+        if not str(event.get("acknowledged_at", "")).strip():
+            current["unacknowledged_count"] = int(current.get("unacknowledged_count", 0)) + 1
+        if str(event.get("escalated_at", "")).strip():
+            current["escalated_count"] = int(current.get("escalated_count", 0)) + 1
+        if (
+            not str(event.get("acknowledged_at", "")).strip()
+            and str(event.get("severity", "")).strip() in {"error", "critical"}
+        ):
+            current["open_high_priority_count"] = int(current.get("open_high_priority_count", 0)) + 1
+        if str(event.get("timestamp", "")) > str(current.get("last_seen_at", "")):
+            current["last_seen_at"] = str(event.get("timestamp", ""))
+    rows = list(grouped.values())
+    rows.sort(
+        key=lambda item: (
+            -int(item.get("unacknowledged_count", 0)),
+            -int(item.get("escalated_count", 0)),
+            -int(item.get("event_count", 0)),
+            str(item.get("owner", "")),
+        )
+    )
+    return rows
+
+
 def _build_execution_requests(executions: list[dict[str, object]]) -> list[dict[str, object]]:
     """把多次 execution attempt 按 `request_id` 归并成请求级摘要。"""
     grouped: dict[str, list[dict[str, object]]] = {}
@@ -375,6 +415,7 @@ def build_history_payload(
     execution_requests = _build_execution_requests(executions)
     execution_request_details = _build_execution_request_details(executions)
     notification_summary = _build_notification_summary(notification_events)
+    notification_owner_summary = _build_notification_owner_summary(notification_events)
     request_anomalies = sorted(
         [item for item in execution_requests if item.get("anomaly_score", 0) > 0],
         key=lambda item: (-int(item.get("anomaly_score", 0)), str(item.get("last_updated_at", ""))),
@@ -476,6 +517,7 @@ def build_history_payload(
         "request_anomalies": request_anomalies[:8],
         "recent_executions": executions,
         "notification_summary": notification_summary[:8],
+        "notification_owner_summary": notification_owner_summary[:8],
         "order_lifecycles": order_lifecycles,
         "order_lifecycle_details": order_lifecycle_details,
         "recent_orders": orders,
