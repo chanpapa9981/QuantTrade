@@ -2609,11 +2609,16 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         app.broker_sync(runner_id="paper-runner")
 
         reconcile = app.broker_reconcile(limit=10)
+        controller_health = app.controller_health(runs_limit=5, events_limit=10)
 
         self.assertEqual(reconcile["broker_reconcile"]["status"], "drift")
         self.assertGreater(reconcile["broker_reconcile"]["mismatch_count"], 0)
         self.assertEqual(len(reconcile["broker_reconcile"]["rows"]), 4)
         self.assertIn("drift detected", reconcile["broker_reconcile"]["notes"][0])
+        self.assertIn(
+            "broker_reconcile_drift",
+            [issue["code"] for issue in controller_health["controller_health"]["issues"]],
+        )
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""

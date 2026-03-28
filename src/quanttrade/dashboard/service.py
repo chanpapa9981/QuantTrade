@@ -278,6 +278,7 @@ def _build_controller_health(
     *,
     execution_requests: list[dict[str, object]],
     broker_health: dict[str, object],
+    broker_reconcile: dict[str, object],
     notification_events: list[dict[str, object]],
     notification_sla_summary: list[dict[str, object]],
     runtime_reconcile_preview: dict[str, int] | None = None,
@@ -299,6 +300,7 @@ def _build_controller_health(
     watch_requests = len([item for item in execution_requests if item.get("health_label") == "watch"])
     stale_broker_snapshot = int(bool(broker_health.get("stale")))
     failed_broker_sync = int(bool(broker_health.get("failed")))
+    broker_reconcile_drift = int(broker_reconcile.get("mismatch_count", 0) or 0)
     stale_execution_candidates = int(runtime_reconcile_preview.get("recovered_stale_executions", 0))
     assignment_backfill_candidates = int(runtime_reconcile_preview.get("repaired_assignment_timestamps", 0))
     resolution_backfill_candidates = int(runtime_reconcile_preview.get("repaired_resolution_acknowledgements", 0))
@@ -329,6 +331,12 @@ def _build_controller_health(
         severity="warning",
         count=stale_broker_snapshot,
         detail="最近一次 broker 快照已超过阈值，继续依赖它做判断存在风险。",
+    )
+    add_issue(
+        code="broker_reconcile_drift",
+        severity="warning",
+        count=broker_reconcile_drift,
+        detail="最新本地运行结果与 broker 快照存在 drift，建议进一步做对账排查。",
     )
     add_issue(
         code="stale_execution_candidates",
@@ -390,6 +398,7 @@ def _build_controller_health(
             "watch_requests": watch_requests,
             "failed_broker_sync": failed_broker_sync,
             "stale_broker_snapshot": stale_broker_snapshot,
+            "broker_reconcile_drift": broker_reconcile_drift,
             "unacknowledged_critical_notifications": unacknowledged_critical,
             "sla_breached_notifications": len(notification_sla_summary),
             "stale_execution_candidates": stale_execution_candidates,
@@ -874,6 +883,7 @@ def build_history_payload(
     controller_health = _build_controller_health(
         execution_requests=execution_requests,
         broker_health=broker_health,
+        broker_reconcile=broker_reconcile,
         notification_events=notification_events,
         notification_sla_summary=notification_sla_summary,
         runtime_reconcile_preview=runtime_reconcile_preview or {},

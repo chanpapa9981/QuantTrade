@@ -959,6 +959,18 @@
 | 未完成 | 更严格的订单/持仓映射规则、按阈值触发 drift 告警、实盘 broker 回报驱动的增量对账、对账异常的自动恢复动作 |
 | 备注 | 这一轮把 broker 线从“健康检查”推进成了“轻量对账预览”，更接近真实准实盘系统需要的控制能力 |
 
+### 2026-03-28 第 58 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把 broker drift 从“单独看的辅助信息”升级成 controller health 里的正式问题项 |
+| 输入 | 已有 `Broker Reconcile` 面板和 `Broker Drift` 卡片，但如果 operator 主要看 controller health，仍然可能错过本地状态与 broker 状态已经开始偏离这件事 |
+| 产出 | controller health 增加 `broker_reconcile_drift` 问题项与摘要计数；对应 drift 测试增强 |
+| 结果 | 现在只要最新本地 run 和 broker 快照存在差异，controller health 就会把这件事列为 warning 级问题，和 stale execution、stale broker snapshot 一起进入优先排查列表 |
+| 为什么这么做 | 因为真正的控制器不是把信息摊得越多越好，而是把“值得优先处理的偏差”拉进同一套问题清单里。只有 drift 进入 controller health，它才真正从一个页面展示项变成系统级运行风险信号。 |
+| 未完成 | drift 阈值分级、按 drift 类型自动通知、drift 驱动的 protection 动作、真实券商回报和本地状态的持续对账 |
+| 备注 | 这一轮把 broker 对账预览继续推进成了控制器级告警输入 |
+
 ---
 
 ## 10. 完整项目搭建观察框架
