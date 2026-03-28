@@ -59,6 +59,8 @@ class NotificationConfig:
     enabled: bool = False
     min_level: str = "warning"
     outbox_path: str = "var/notifications/outbox.jsonl"
+    delivery_log_path: str = "var/notifications/delivery-log.jsonl"
+    max_delivery_attempts: int = 3
 
 
 @dataclass(slots=True)

@@ -77,6 +77,9 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Notifications", html)
         self.assertIn("Critical Alerts", html)
         self.assertIn("Queued Alerts", html)
+        self.assertIn("Pending Alerts", html)
+        self.assertIn("Dispatched Alerts", html)
+        self.assertIn("Failed Alerts", html)
         self.assertIn("Execution Requests", html)
         self.assertIn("Request Anomalies", html)
         self.assertIn("Recent Executions", html)
@@ -106,6 +109,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("side-filter", html)
         self.assertIn("broker-filter", html)
         self.assertIn("focus-filter", html)
+        self.assertIn("notification-status-filter", html)
         self.assertIn("selected-context", html)
         self.assertIn("Deep Link", html)
         self.assertIn("Copy Link", html)
@@ -115,6 +119,8 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("window.location.hash", html)
         self.assertIn("Recent Orders", html)
         self.assertIn("Recent Notifications", html)
+        self.assertIn("Attempts", html)
+        self.assertIn("Last Error", html)
         self.assertIn("Recent Audit Events", html)
 
 

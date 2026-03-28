@@ -46,3 +46,5 @@ notification:
   enabled: false
   min_level: warning
   outbox_path: var/notifications/outbox.jsonl
+  delivery_log_path: var/notifications/delivery-log.jsonl
+  max_delivery_attempts: 3

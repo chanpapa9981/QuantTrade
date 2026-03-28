@@ -354,6 +354,23 @@ def build_history_payload(
             "total_notifications": len(notification_events),
             "critical_notifications": len([item for item in notification_events if item.get("severity") == "critical"]),
             "queued_notifications": len([item for item in notification_events if item.get("delivery_status") == "queued"]),
+            "pending_notifications": len(
+                [
+                    item
+                    for item in notification_events
+                    if item.get("delivery_status") in {"queued", "delivery_failed_retryable"}
+                ]
+            ),
+            "dispatched_notifications": len(
+                [item for item in notification_events if item.get("delivery_status") == "dispatched"]
+            ),
+            "failed_notifications": len(
+                [
+                    item
+                    for item in notification_events
+                    if item.get("delivery_status") in {"delivery_failed_retryable", "delivery_failed_final"}
+                ]
+            ),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),

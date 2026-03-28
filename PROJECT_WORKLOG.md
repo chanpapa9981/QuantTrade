@@ -107,6 +107,7 @@
 | W-054 | 稳定性 / Dashboard | 增加可配置退避策略与 request 级异常聚合 | 支持线性/指数退避、最大退避封顶、request 健康度/异常分数/失败类别摘要 | 已完成 |
 | W-055 | 稳定性 / CLI / Dashboard | 增加保护模式冷却恢复与状态查询 | 支持冷却窗口、自动恢复、`protection-status` 命令、cooldown 可视化 | 已完成 |
 | W-056 | 通知 / Dashboard / CLI | 增加本地通知事件与 outbox 骨架 | 支持 notification_events、`notifications` 命令、history 告警面板和 JSONL outbox | 已完成 |
+| W-057 | 通知 / Dashboard / CLI | 增加通知投递 worker 状态机 | 支持 `notifications-deliver`、投递尝试次数/失败原因/adapter dispatch log、history 告警状态筛选与统计 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -731,6 +732,18 @@
 | 为什么这么做 | 因为“系统自己知道出事了”和“外部有人能收到可消费的告警”是两回事。先把通知事件和 outbox 骨架搭起来，后面接真实渠道时就不用再回头侵入业务主流程。 |
 | 未完成 | 真实 Telegram/微信发送器、失败重投、通知去重、告警聚合压缩和静默窗口 |
 | 备注 | 这一轮把通知层从“配置占位”推进成了“有事件、有出口、有页面可见性”的真实骨架 |
+
+### 2026-03-28 第 40 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让通知系统从“只会产生 queued 事件”升级成“有 worker、会尝试投递、会记录失败原因和最终放弃”的完整骨架 |
+| 输入 | 已有 `notification_events`、本地 outbox、`notifications` CLI 和 history 告警面板，但还缺少真正的投递推进过程 |
+| 产出 | `delivery_log_path` / `max_delivery_attempts` 配置；notification delivery 字段 `delivery_attempts` / `delivered_at` / `last_error`；本地 adapter worker；`notifications-deliver` CLI；history 页通知状态筛选、Attempts/Last Error 展示和新的告警统计卡片；对应测试 |
+| 结果 | 现在通知事件不再只停留在 `queued`，而是可以被本地 worker 继续推进到 `dispatched`、`delivery_failed_retryable`、`delivery_failed_final`；系统能清楚看到每条通知试了几次、最后一次为什么失败、还有没有继续重试的必要 |
+| 为什么这么做 | 因为真正的通知系统不是“把事件写进 outbox 就结束了”，而是要回答三个更实际的问题：这条告警有没有被 worker 接手、worker 试了几次、最终到底发成了还是放弃了。先把这个内层状态机做扎实，后面接 Telegram/微信时才能稳稳地替换 adapter，而不是重新改一遍整条业务链。 |
+| 未完成 | 真实 Telegram/微信 provider、按渠道配置 target、投递去重、批量聚合、静默窗口、定时 worker |
+| 备注 | 这一轮把通知层从“有告警事件”推进成了“有投递推进过程和失败闭环的运维骨架” |
 
 ---
 

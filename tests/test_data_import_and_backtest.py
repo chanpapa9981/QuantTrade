@@ -31,8 +31,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         protection_mode_cooldown_seconds: int = 0,
         skip_run_on_protection_mode: bool = True,
         notification_enabled: bool = False,
+        notification_provider: str = "telegram",
         notification_min_level: str = "warning",
         notification_outbox_path: str = "var/notifications/test-outbox.jsonl",
+        notification_delivery_log_path: str = "var/notifications/test-delivery-log.jsonl",
+        notification_max_delivery_attempts: int = 3,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -60,10 +63,12 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  protection_mode_cooldown_seconds: {protection_mode_cooldown_seconds}",
                     f"  skip_run_on_protection_mode: {'true' if skip_run_on_protection_mode else 'false'}",
                     "notification:",
-                    "  provider: telegram",
+                    f"  provider: {notification_provider}",
                     f"  enabled: {'true' if notification_enabled else 'false'}",
                     f"  min_level: {notification_min_level}",
                     f"  outbox_path: {notification_outbox_path}",
+                    f"  delivery_log_path: {notification_delivery_log_path}",
+                    f"  max_delivery_attempts: {notification_max_delivery_attempts}",
                 ]
             ),
             encoding="utf-8",
@@ -219,6 +224,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("total_notifications", history_payload["history_summary"])
         self.assertIn("critical_notifications", history_payload["history_summary"])
         self.assertIn("queued_notifications", history_payload["history_summary"])
+        self.assertIn("pending_notifications", history_payload["history_summary"])
+        self.assertIn("dispatched_notifications", history_payload["history_summary"])
+        self.assertIn("failed_notifications", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
 
@@ -495,6 +503,128 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_notifications["notifications"][0]["category"], "execution_final_failure")
         self.assertEqual(recent_notifications["notifications"][0]["delivery_status"], "queued")
         self.assertTrue(outbox_path.exists())
+
+    def test_notification_worker_dispatches_queued_events_to_local_adapter_log(self) -> None:
+        """验证通知 worker 会把 queued 事件推进为 dispatched，并留下 adapter 处理痕迹。"""
+        base_dir = Path("var/test-artifacts/notification-dispatch")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-dispatch.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        delivery_log_path = base_dir / "delivery-log.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+        if delivery_log_path.exists():
+            delivery_log_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_delivery_log_path=str(delivery_log_path),
+            notification_max_delivery_attempts=3,
+        )
+        app = QuantTradeApp(str(config_path))
+
+        notification = app._record_notification(
+            severity="warning",
+            category="execution_retry_scheduled",
+            title="Retry scheduled",
+            message="worker dispatch test",
+            symbol="AAPL",
+            timeframe="1d",
+            execution_id="exec-1",
+            request_id="req-1",
+        )
+        before_delivery = app.recent_notification_events(limit=5)
+        delivery_result = app.deliver_notifications(limit=5)
+        after_delivery = app.recent_notification_events(limit=5)
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
+
+        self.assertEqual(notification["delivery_status"], "queued")
+        self.assertEqual(before_delivery["notifications"][0]["delivery_status"], "queued")
+        self.assertEqual(delivery_result["processed"], 1)
+        self.assertEqual(delivery_result["dispatched"], 1)
+        self.assertEqual(delivery_result["failed_retryable"], 0)
+        self.assertEqual(delivery_result["failed_final"], 0)
+        self.assertEqual(delivery_result["remaining_pending"], 0)
+        self.assertEqual(after_delivery["notifications"][0]["delivery_status"], "dispatched")
+        self.assertEqual(after_delivery["notifications"][0]["delivery_attempts"], 1)
+        self.assertTrue(after_delivery["notifications"][0]["delivered_at"])
+        self.assertEqual(after_delivery["notifications"][0]["last_error"], "")
+        self.assertEqual(history_payload["history_summary"]["dispatched_notifications"], 1)
+        self.assertEqual(history_payload["history_summary"]["pending_notifications"], 0)
+        self.assertTrue(outbox_path.exists())
+        self.assertTrue(delivery_log_path.exists())
+        delivered_payload = json.loads(delivery_log_path.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(delivered_payload["category"], "execution_retry_scheduled")
+        self.assertEqual(delivered_payload["adapter_provider"], "telegram")
+
+    def test_notification_worker_marks_retryable_and_final_delivery_failures(self) -> None:
+        """验证通知 worker 在 adapter 失败时会区分“还能再试”和“最终放弃”两种状态。"""
+        base_dir = Path("var/test-artifacts/notification-delivery-failure")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-delivery-failure.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        delivery_log_path = base_dir / "delivery-log.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+        if delivery_log_path.exists():
+            delivery_log_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_provider="failing_stub",
+            notification_outbox_path=str(outbox_path),
+            notification_delivery_log_path=str(delivery_log_path),
+            notification_max_delivery_attempts=2,
+        )
+        app = QuantTradeApp(str(config_path))
+        app._record_notification(
+            severity="critical",
+            category="execution_final_failure",
+            title="Final failure",
+            message="worker failure test",
+            symbol="AAPL",
+            timeframe="1d",
+            execution_id="exec-2",
+            request_id="req-2",
+        )
+
+        first_delivery = app.deliver_notifications(limit=5)
+        after_first = app.recent_notification_events(limit=5)
+        first_history = app.dashboard_history(runs_limit=5, events_limit=5)
+        second_delivery = app.deliver_notifications(limit=5)
+        after_second = app.recent_notification_events(limit=5)
+        second_history = app.dashboard_history(runs_limit=5, events_limit=5)
+
+        self.assertEqual(first_delivery["processed"], 1)
+        self.assertEqual(first_delivery["failed_retryable"], 1)
+        self.assertEqual(first_delivery["failed_final"], 0)
+        self.assertEqual(after_first["notifications"][0]["delivery_status"], "delivery_failed_retryable")
+        self.assertEqual(after_first["notifications"][0]["delivery_attempts"], 1)
+        self.assertIn("simulated notification adapter failure", after_first["notifications"][0]["last_error"])
+        self.assertEqual(first_history["history_summary"]["pending_notifications"], 1)
+        self.assertEqual(first_history["history_summary"]["failed_notifications"], 1)
+
+        self.assertEqual(second_delivery["processed"], 1)
+        self.assertEqual(second_delivery["failed_retryable"], 0)
+        self.assertEqual(second_delivery["failed_final"], 1)
+        self.assertEqual(second_delivery["remaining_pending"], 0)
+        self.assertEqual(after_second["notifications"][0]["delivery_status"], "delivery_failed_final")
+        self.assertEqual(after_second["notifications"][0]["delivery_attempts"], 2)
+        self.assertIn("simulated notification adapter failure", after_second["notifications"][0]["last_error"])
+        self.assertEqual(second_history["history_summary"]["pending_notifications"], 0)
+        self.assertEqual(second_history["history_summary"]["failed_notifications"], 1)
+        self.assertFalse(delivery_log_path.exists())
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

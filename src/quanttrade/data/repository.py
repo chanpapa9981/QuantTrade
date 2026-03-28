@@ -540,6 +540,9 @@ class BacktestRunRepository:
         provider: str,
         delivery_status: str,
         delivery_target: str = "",
+        delivery_attempts: int = 0,
+        delivered_at: str = "",
+        last_error: str = "",
         symbol: str = "",
         timeframe: str = "",
         run_id: str = "",
@@ -559,9 +562,9 @@ class BacktestRunRepository:
                 """
                 INSERT INTO notification_events (
                     event_id, timestamp, severity, category, title, message,
-                    provider, delivery_status, delivery_target,
+                    provider, delivery_status, delivery_target, delivery_attempts, delivered_at, last_error,
                     symbol, timeframe, run_id, execution_id, request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -573,6 +576,9 @@ class BacktestRunRepository:
                     provider[:40],
                     delivery_status[:40],
                     delivery_target[:300],
+                    max(int(delivery_attempts), 0),
+                    delivered_at[:40],
+                    last_error[:500],
                     symbol[:40],
                     timeframe[:20],
                     run_id[:80],
@@ -594,7 +600,8 @@ class BacktestRunRepository:
             rows = connection.execute(
                 """
                 SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
-                       delivery_target, symbol, timeframe, run_id, execution_id, request_id
+                       delivery_target, delivery_attempts, delivered_at, last_error,
+                       symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -614,14 +621,106 @@ class BacktestRunRepository:
                 "provider": row[6],
                 "delivery_status": row[7],
                 "delivery_target": row[8],
-                "symbol": row[9],
-                "timeframe": row[10],
-                "run_id": row[11],
-                "execution_id": row[12],
-                "request_id": row[13],
+                "delivery_attempts": row[9],
+                "delivered_at": row[10],
+                "last_error": row[11],
+                "symbol": row[12],
+                "timeframe": row[13],
+                "run_id": row[14],
+                "execution_id": row[15],
+                "request_id": row[16],
             }
             for row in rows
         ]
+
+    def fetch_notifications_pending_delivery(self, limit: int = 20, max_delivery_attempts: int = 3) -> list[dict[str, object]]:
+        """查询仍需要通知 worker 继续处理的事件。
+
+        这里保留 `queued` 和 `delivery_failed_retryable` 两种状态：
+        - `queued` 代表业务流程刚把事件放进待投递队列；
+        - `delivery_failed_retryable` 代表 adapter 尝试过一次，但还没到最终放弃的门槛。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "notification_events" for table in tables):
+                return []
+            rows = connection.execute(
+                """
+                SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
+                       delivery_target, delivery_attempts, delivered_at, last_error,
+                       symbol, timeframe, run_id, execution_id, request_id
+                FROM notification_events
+                WHERE delivery_status IN ('queued', 'delivery_failed_retryable')
+                  AND delivery_attempts < ?
+                ORDER BY timestamp ASC
+                LIMIT ?
+                """,
+                (max(int(max_delivery_attempts), 1), limit),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            {
+                "event_id": row[0],
+                "timestamp": row[1],
+                "severity": row[2],
+                "category": row[3],
+                "title": row[4],
+                "message": row[5],
+                "provider": row[6],
+                "delivery_status": row[7],
+                "delivery_target": row[8],
+                "delivery_attempts": row[9],
+                "delivered_at": row[10],
+                "last_error": row[11],
+                "symbol": row[12],
+                "timeframe": row[13],
+                "run_id": row[14],
+                "execution_id": row[15],
+                "request_id": row[16],
+            }
+            for row in rows
+        ]
+
+    def mark_notification_delivery_result(
+        self,
+        *,
+        event_id: str,
+        delivery_status: str,
+        delivery_target: str = "",
+        delivered_at: str = "",
+        last_error: str = "",
+        increment_attempts: bool = True,
+    ) -> None:
+        """记录通知 worker 的处理结果。
+
+        这样设计后，业务流程只负责“把通知生出来”，而 worker 负责“把通知往前推进到下一状态”。
+        两者职责分开，后续接真实 provider 时也更容易替换。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET delivery_status = ?,
+                    delivery_target = ?,
+                    delivered_at = ?,
+                    last_error = ?,
+                    delivery_attempts = delivery_attempts + ?
+                WHERE event_id = ?
+                """,
+                (
+                    delivery_status[:40],
+                    delivery_target[:300],
+                    delivered_at[:40],
+                    last_error[:500],
+                    1 if increment_attempts else 0,
+                    event_id[:80],
+                ),
+            )
+        finally:
+            connection.close()
 
     def recover_stale_executions(self, symbol: str, timeframe: str) -> int:
         """把异常中断后残留的 running 记录修正为 abandoned。"""
@@ -1389,7 +1488,8 @@ class BacktestRunRepository:
                 notification_rows = connection.execute(
                     """
                     SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
-                           delivery_target, symbol, timeframe, run_id, execution_id, request_id
+                           delivery_target, delivery_attempts, delivered_at, last_error,
+                           symbol, timeframe, run_id, execution_id, request_id
                     FROM notification_events
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -1407,11 +1507,14 @@ class BacktestRunRepository:
                         "provider": row[6],
                         "delivery_status": row[7],
                         "delivery_target": row[8],
-                        "symbol": row[9],
-                        "timeframe": row[10],
-                        "run_id": row[11],
-                        "execution_id": row[12],
-                        "request_id": row[13],
+                        "delivery_attempts": row[9],
+                        "delivered_at": row[10],
+                        "last_error": row[11],
+                        "symbol": row[12],
+                        "timeframe": row[13],
+                        "run_id": row[14],
+                        "execution_id": row[15],
+                        "request_id": row[16],
                     }
                     for row in notification_rows
                 ]

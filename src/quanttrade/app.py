@@ -30,7 +30,11 @@ from quanttrade.data.repository import BacktestRunRepository, BarRepository
 from quanttrade.data.schema import create_schema
 from quanttrade.data.storage import database_lock, ensure_data_dirs, execution_lock
 from quanttrade.execution.simulator import SimulatedExecutionEngine
-from quanttrade.notification.service import append_notification_to_outbox, should_emit_notification
+from quanttrade.notification.service import (
+    append_notification_to_outbox,
+    dispatch_notification_via_adapter,
+    should_emit_notification,
+)
 from quanttrade.risk.engine import RiskEngine
 from quanttrade.strategies.atr_dtf import AtrDynamicTrendFollowingStrategy
 
@@ -220,6 +224,8 @@ class QuantTradeApp:
             delivery_status = "filtered"
 
         with database_lock(self.settings.data.duckdb_path):
+            # 通知系统现在已经能脱离回测主流程单独使用，所以这里不能假设表一定已经由别的流程建好。
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             event_id = repository.save_notification_event(
                 severity=severity,
@@ -542,6 +548,111 @@ class QuantTradeApp:
         with database_lock(self.settings.data.duckdb_path):
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"notifications": repository.fetch_recent_notification_events(limit=limit)}
+
+    def deliver_notifications(self, limit: int = 20) -> dict[str, object]:
+        """让通知 worker 处理待投递事件。
+
+        注意这里的“deliver”在当前阶段表示：
+        - worker 已经读取 queued 事件；
+        - 尝试把它交给本地 adapter 骨架；
+        - 再把尝试结果回写到数据库。
+
+        这样一来，后续哪怕换成真实 Telegram/微信 provider，
+        也只需要替换 adapter，而不用回头修改业务侧的通知生成逻辑。
+        """
+        max_delivery_attempts = max(int(self.settings.notification.max_delivery_attempts), 1)
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            candidates = repository.fetch_notifications_pending_delivery(
+                limit=limit,
+                max_delivery_attempts=max_delivery_attempts,
+            )
+
+        processed = 0
+        dispatched = 0
+        failed_retryable = 0
+        failed_final = 0
+
+        for event in candidates:
+            processed += 1
+            attempt_number = int(event.get("delivery_attempts", 0)) + 1
+            event_id = str(event.get("event_id", ""))
+            LOGGER.info(
+                "dispatching notification event_id=%s provider=%s attempt=%s/%s previous_status=%s",
+                event_id,
+                event.get("provider", ""),
+                attempt_number,
+                max_delivery_attempts,
+                event.get("delivery_status", ""),
+            )
+            try:
+                delivery_target = dispatch_notification_via_adapter(self.settings.notification, event)
+                with database_lock(self.settings.data.duckdb_path):
+                    repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                    repository.mark_notification_delivery_result(
+                        event_id=event_id,
+                        delivery_status="dispatched",
+                        delivery_target=delivery_target,
+                        delivered_at=datetime.now(timezone.utc).isoformat(),
+                        last_error="",
+                        increment_attempts=True,
+                    )
+                dispatched += 1
+            except Exception as exc:
+                last_error = str(exc)
+                next_status = (
+                    "delivery_failed_final"
+                    if attempt_number >= max_delivery_attempts
+                    else "delivery_failed_retryable"
+                )
+                with database_lock(self.settings.data.duckdb_path):
+                    repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                    repository.mark_notification_delivery_result(
+                        event_id=event_id,
+                        delivery_status=next_status,
+                        delivery_target=str(event.get("delivery_target", "")),
+                        delivered_at="",
+                        last_error=last_error,
+                        increment_attempts=True,
+                    )
+                if next_status == "delivery_failed_final":
+                    failed_final += 1
+                    LOGGER.error(
+                        "notification delivery reached final failure event_id=%s provider=%s attempt=%s/%s reason=%s",
+                        event_id,
+                        event.get("provider", ""),
+                        attempt_number,
+                        max_delivery_attempts,
+                        last_error,
+                    )
+                else:
+                    failed_retryable += 1
+                    LOGGER.warning(
+                        "notification delivery failed but remains retryable event_id=%s provider=%s attempt=%s/%s reason=%s",
+                        event_id,
+                        event.get("provider", ""),
+                        attempt_number,
+                        max_delivery_attempts,
+                        last_error,
+                    )
+
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            remaining_pending = len(
+                repository.fetch_notifications_pending_delivery(
+                    limit=1000,
+                    max_delivery_attempts=max_delivery_attempts,
+                )
+            )
+
+        return {
+            "processed": processed,
+            "dispatched": dispatched,
+            "failed_retryable": failed_retryable,
+            "failed_final": failed_final,
+            "remaining_pending": remaining_pending,
+            "max_delivery_attempts": max_delivery_attempts,
+        }
 
     def dashboard_history(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, object]:
         """把历史数据整理成前端更容易消费的结构。"""
