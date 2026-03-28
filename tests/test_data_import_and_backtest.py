@@ -62,6 +62,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         broker_account_snapshot_path: str = "var/broker/account.json",
         broker_positions_snapshot_path: str = "var/broker/positions.json",
         broker_orders_snapshot_path: str = "var/broker/orders.json",
+        broker_max_snapshot_age_seconds: int = 0,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -103,6 +104,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  account_snapshot_path: {broker_account_snapshot_path}",
                     f"  positions_snapshot_path: {broker_positions_snapshot_path}",
                     f"  orders_snapshot_path: {broker_orders_snapshot_path}",
+                    f"  max_snapshot_age_seconds: {broker_max_snapshot_age_seconds}",
                     "notification:",
                     f"  provider: {notification_provider}",
                     f"  enabled: {'true' if notification_enabled else 'false'}",
@@ -2481,6 +2483,137 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(history_payload["history_summary"]["latest_broker_orders"], 1)
         self.assertGreater(history_payload["history_summary"]["latest_broker_equity"], 0.0)
         self.assertEqual(history_payload["recent_broker_syncs"][0]["runner_id"], "paper-runner")
+        self.assertIn("broker_health", history_payload)
+
+    def test_broker_health_flags_stale_snapshot_and_controller_issue(self) -> None:
+        """验证过旧的 broker 快照会进入 broker health 和 controller health 视图。"""
+        base_dir = Path("var/test-artifacts/broker-health-stale")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "broker-health-stale.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        account_path, positions_path, orders_path = self._write_broker_snapshots(base_dir)
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(account_path),
+            broker_positions_snapshot_path=str(positions_path),
+            broker_orders_snapshot_path=str(orders_path),
+            broker_max_snapshot_age_seconds=60,
+        )
+
+        app = QuantTradeApp(str(config_path))
+        sync_result = app.broker_sync(runner_id="paper-runner")
+        sync_id = sync_result["detail"]["sync"]["sync_id"]
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                "UPDATE broker_syncs SET synced_at = ? WHERE sync_id = ?",
+                (datetime(2024, 1, 1, tzinfo=timezone.utc).isoformat(), sync_id),
+            )
+        finally:
+            connection.close()
+
+        broker_health = app.broker_health(limit=5)
+        controller_health = app.controller_health(runs_limit=5, events_limit=5)
+
+        self.assertTrue(broker_health["broker_health"]["stale"])
+        self.assertEqual(broker_health["broker_health"]["max_snapshot_age_seconds"], 60)
+        self.assertGreater(broker_health["broker_health"]["snapshot_age_seconds"], 60)
+        self.assertIn(
+            "stale_broker_snapshot",
+            [issue["code"] for issue in controller_health["controller_health"]["issues"]],
+        )
+
+    def test_broker_health_flags_failed_latest_sync(self) -> None:
+        """验证最近一次 broker 同步失败时，会显式进入 broker health 失败状态。"""
+        base_dir = Path("var/test-artifacts/broker-health-failed")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "broker-health-failed.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        missing_account_path = base_dir / "missing-account.json"
+        missing_positions_path = base_dir / "missing-positions.json"
+        missing_orders_path = base_dir / "missing-orders.json"
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(missing_account_path),
+            broker_positions_snapshot_path=str(missing_positions_path),
+            broker_orders_snapshot_path=str(missing_orders_path),
+            broker_max_snapshot_age_seconds=300,
+        )
+
+        app = QuantTradeApp(str(config_path))
+        sync_result = app.broker_sync(runner_id="paper-runner")
+        broker_health = app.broker_health(limit=5)
+        controller_health = app.controller_health(runs_limit=5, events_limit=5)
+
+        self.assertEqual(sync_result["status"], "failed")
+        self.assertTrue(broker_health["broker_health"]["failed"])
+        self.assertEqual(broker_health["broker_health"]["latest_status"], "failed")
+        self.assertEqual(broker_health["broker_health"]["failed_sync_count"], 1)
+        self.assertIn(
+            "failed_broker_sync",
+            [issue["code"] for issue in controller_health["controller_health"]["issues"]],
+        )
+
+    def test_broker_reconcile_reports_drift_against_latest_run(self) -> None:
+        """验证 broker reconcile 会把最新本地运行和 broker 快照之间的差异显式列出来。"""
+        base_dir = Path("var/test-artifacts/broker-reconcile")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "broker-reconcile.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 9, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(15):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.5, 2),
+                        "high": round(price + 0.6, 2),
+                        "low": round(price - 0.9, 2),
+                        "close": round(price, 2),
+                        "volume": 2_200_000 + offset * 1000,
+                    }
+                )
+
+        account_path, positions_path, orders_path = self._write_broker_snapshots(base_dir)
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(account_path),
+            broker_positions_snapshot_path=str(positions_path),
+            broker_orders_snapshot_path=str(orders_path),
+        )
+
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+        app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        app.broker_sync(runner_id="paper-runner")
+
+        reconcile = app.broker_reconcile(limit=10)
+
+        self.assertEqual(reconcile["broker_reconcile"]["status"], "drift")
+        self.assertGreater(reconcile["broker_reconcile"]["mismatch_count"], 0)
+        self.assertEqual(len(reconcile["broker_reconcile"]["rows"]), 4)
+        self.assertIn("drift detected", reconcile["broker_reconcile"]["notes"][0])
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""

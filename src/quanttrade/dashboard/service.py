@@ -277,6 +277,7 @@ def _build_notification_inbox(notification_events: list[dict[str, object]]) -> l
 def _build_controller_health(
     *,
     execution_requests: list[dict[str, object]],
+    broker_health: dict[str, object],
     notification_events: list[dict[str, object]],
     notification_sla_summary: list[dict[str, object]],
     runtime_reconcile_preview: dict[str, int] | None = None,
@@ -296,6 +297,8 @@ def _build_controller_health(
     cooldown_requests = len([item for item in execution_requests if item.get("cooldown_active")])
     critical_requests = len([item for item in execution_requests if item.get("health_label") == "critical"])
     watch_requests = len([item for item in execution_requests if item.get("health_label") == "watch"])
+    stale_broker_snapshot = int(bool(broker_health.get("stale")))
+    failed_broker_sync = int(bool(broker_health.get("failed")))
     stale_execution_candidates = int(runtime_reconcile_preview.get("recovered_stale_executions", 0))
     assignment_backfill_candidates = int(runtime_reconcile_preview.get("repaired_assignment_timestamps", 0))
     resolution_backfill_candidates = int(runtime_reconcile_preview.get("repaired_resolution_acknowledgements", 0))
@@ -315,6 +318,18 @@ def _build_controller_health(
             }
         )
 
+    add_issue(
+        code="failed_broker_sync",
+        severity="critical",
+        count=failed_broker_sync,
+        detail="最近一次 broker 同步失败，外部账户快照可能已经失真。",
+    )
+    add_issue(
+        code="stale_broker_snapshot",
+        severity="warning",
+        count=stale_broker_snapshot,
+        detail="最近一次 broker 快照已超过阈值，继续依赖它做判断存在风险。",
+    )
     add_issue(
         code="stale_execution_candidates",
         severity="critical",
@@ -373,6 +388,8 @@ def _build_controller_health(
             "cooldown_requests": cooldown_requests,
             "critical_requests": critical_requests,
             "watch_requests": watch_requests,
+            "failed_broker_sync": failed_broker_sync,
+            "stale_broker_snapshot": stale_broker_snapshot,
             "unacknowledged_critical_notifications": unacknowledged_critical,
             "sla_breached_notifications": len(notification_sla_summary),
             "stale_execution_candidates": stale_execution_candidates,
@@ -459,6 +476,119 @@ def _build_broker_sync_summary(broker_syncs: list[dict[str, object]]) -> dict[st
         "latest_broker_positions": int(latest.get("position_count", 0) or 0),
         "latest_broker_orders": int(latest.get("order_count", 0) or 0),
         "latest_broker_synced_at": str(latest.get("synced_at", "")),
+    }
+
+
+def _build_broker_health(
+    broker_syncs: list[dict[str, object]],
+    *,
+    max_snapshot_age_seconds: int = 0,
+) -> dict[str, object]:
+    """计算最近一份 broker 快照是否过旧、是否已经失败。"""
+    latest = broker_syncs[0] if broker_syncs else {}
+    synced_at_text = str(latest.get("synced_at", "")).strip()
+    age_seconds = 0
+    if synced_at_text:
+        try:
+            synced_at = datetime.fromisoformat(synced_at_text)
+            age_seconds = max(int((datetime.now(UTC) - synced_at).total_seconds()), 0)
+        except ValueError:
+            age_seconds = 0
+    threshold = max(int(max_snapshot_age_seconds), 0)
+    latest_status = str(latest.get("status", "")).strip()
+    stale = bool(threshold > 0 and synced_at_text and age_seconds > threshold)
+    failed = latest_status == "failed"
+    return {
+        "latest_sync_id": str(latest.get("sync_id", "")),
+        "latest_provider": str(latest.get("provider", "")),
+        "latest_status": latest_status,
+        "latest_synced_at": synced_at_text,
+        "latest_runner_id": str(latest.get("runner_id", "")),
+        "latest_cycle_id": str(latest.get("cycle_id", "")),
+        "snapshot_age_seconds": age_seconds,
+        "max_snapshot_age_seconds": threshold,
+        "stale": stale,
+        "failed": failed,
+        "failed_sync_count": len([item for item in broker_syncs if item.get("status") == "failed"]),
+        "detail": (
+            "no broker sync snapshot has been recorded yet"
+            if not broker_syncs
+            else "latest broker sync failed"
+            if failed
+            else "latest broker snapshot is older than configured threshold"
+            if stale
+            else "broker snapshot is healthy"
+        ),
+    }
+
+
+def _build_broker_reconcile(
+    latest_run_detail: dict[str, object] | None,
+    latest_broker_sync_detail: dict[str, object] | None,
+) -> dict[str, object]:
+    """对最新本地运行结果和最新 broker 快照做轻量差异预览。"""
+    if not latest_run_detail or not latest_broker_sync_detail:
+        return {
+            "status": "unavailable",
+            "mismatch_count": 0,
+            "latest_run_id": str((latest_run_detail or {}).get("run_id", "")),
+            "latest_broker_sync_id": str((latest_broker_sync_detail or {}).get("sync_id", "")),
+            "rows": [],
+            "notes": ["latest run detail or broker sync detail is missing"],
+        }
+
+    local_account = dict(latest_run_detail.get("account_snapshot", {}))
+    broker_sync = dict(latest_broker_sync_detail.get("sync", {}))
+    local_open_orders = len(
+        [item for item in latest_run_detail.get("order_lifecycles", []) if str(item.get("final_status", "")) == "open"]
+    )
+    broker_open_statuses = {"working", "open", "pending_new", "partially_filled", "accepted"}
+    broker_open_orders = len(
+        [
+            item
+            for item in latest_broker_sync_detail.get("orders", [])
+            if str(item.get("status", "")).strip().lower() in broker_open_statuses
+        ]
+    )
+    rows = [
+        {
+            "metric": "equity",
+            "local_value": float(local_account.get("equity", 0.0) or 0.0),
+            "broker_value": float(broker_sync.get("equity", 0.0) or 0.0),
+        },
+        {
+            "metric": "cash",
+            "local_value": float(local_account.get("cash", 0.0) or 0.0),
+            "broker_value": float(broker_sync.get("cash", 0.0) or 0.0),
+        },
+        {
+            "metric": "open_positions",
+            "local_value": int(local_account.get("open_positions", 0) or 0),
+            "broker_value": len(latest_broker_sync_detail.get("positions", [])),
+        },
+        {
+            "metric": "open_orders",
+            "local_value": local_open_orders,
+            "broker_value": broker_open_orders,
+        },
+    ]
+    mismatches: list[str] = []
+    for row in rows:
+        delta = float(row["broker_value"]) - float(row["local_value"])
+        row["delta"] = delta
+        if abs(delta) > 0:
+            mismatches.append(str(row["metric"]))
+    return {
+        "status": "drift" if mismatches else "aligned",
+        "mismatch_count": len(mismatches),
+        "latest_run_id": str(latest_run_detail.get("run", {}).get("run_id", "")),
+        "latest_broker_sync_id": str(broker_sync.get("sync_id", "")),
+        "rows": rows,
+        "notes": (
+            ["local run snapshot and broker snapshot are aligned on the tracked metrics"]
+            if not mismatches
+            else [f"drift detected in: {', '.join(mismatches)}"]
+        ),
     }
 
 
@@ -715,6 +845,9 @@ def build_history_payload(
     notification_events: list[dict[str, object]],
     notification_assignment_sla_seconds: int = 0,
     notification_assignment_sla_overrides: dict[str, int] | None = None,
+    broker_max_snapshot_age_seconds: int = 0,
+    latest_run_detail: dict[str, object] | None = None,
+    latest_broker_sync_detail: dict[str, object] | None = None,
     runtime_reconcile_preview: dict[str, int] | None = None,
 ) -> dict[str, object]:
     """把历史运行结果整理成历史页所需的聚合结构。"""
@@ -728,6 +861,11 @@ def build_history_payload(
     notification_inbox = _build_notification_inbox(notification_events)
     live_runner_summary = _build_live_runner_summary(live_cycles)
     broker_sync_summary = _build_broker_sync_summary(broker_syncs)
+    broker_health = _build_broker_health(
+        broker_syncs,
+        max_snapshot_age_seconds=max(int(broker_max_snapshot_age_seconds), 0),
+    )
+    broker_reconcile = _build_broker_reconcile(latest_run_detail, latest_broker_sync_detail)
     notification_sla_summary = _build_notification_sla_summary(
         notification_events,
         assignment_sla_seconds=max(int(notification_assignment_sla_seconds), 0),
@@ -735,6 +873,7 @@ def build_history_payload(
     )
     controller_health = _build_controller_health(
         execution_requests=execution_requests,
+        broker_health=broker_health,
         notification_events=notification_events,
         notification_sla_summary=notification_sla_summary,
         runtime_reconcile_preview=runtime_reconcile_preview or {},
@@ -770,6 +909,9 @@ def build_history_payload(
             "idle_live_runners": len([item for item in live_runner_summary if int(item.get("idle_streak", 0)) > 0]),
             "total_broker_syncs": broker_sync_summary["total_broker_syncs"],
             "failed_broker_syncs": broker_sync_summary["failed_broker_syncs"],
+            "stale_broker_syncs": int(bool(broker_health["stale"])),
+            "broker_reconcile_mismatches": int(broker_reconcile["mismatch_count"]),
+            "broker_reconcile_status": str(broker_reconcile["status"]),
             "latest_broker_sync_status": broker_sync_summary["latest_broker_sync_status"],
             "latest_broker_provider": broker_sync_summary["latest_broker_provider"],
             "latest_broker_equity": broker_sync_summary["latest_broker_equity"],
@@ -876,6 +1018,8 @@ def build_history_payload(
         "recent_live_cycles": live_cycles,
         "live_runner_summary": live_runner_summary[:8],
         "recent_broker_syncs": broker_syncs,
+        "broker_health": broker_health,
+        "broker_reconcile": broker_reconcile,
         "notification_summary": notification_summary[:8],
         "notification_owner_summary": notification_owner_summary[:8],
         "notification_inbox": notification_inbox[:12],

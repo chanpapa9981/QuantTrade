@@ -118,6 +118,7 @@ class BrokerConfig:
     account_snapshot_path: str = "var/broker/account.json"
     positions_snapshot_path: str = "var/broker/positions.json"
     orders_snapshot_path: str = "var/broker/orders.json"
+    max_snapshot_age_seconds: int = 0
 
 
 @dataclass(slots=True)

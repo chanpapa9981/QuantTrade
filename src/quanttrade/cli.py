@@ -82,6 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
     broker_syncs_parser.add_argument("--limit", type=int, default=20, help="Number of broker sync rows to list")
     broker_sync_detail_parser = subparsers.add_parser("broker-sync-detail", help="Show one broker snapshot sync detail")
     broker_sync_detail_parser.add_argument("--sync-id", required=True, help="Broker sync id")
+    broker_health_parser = subparsers.add_parser("broker-health", help="Show broker snapshot health summary")
+    broker_health_parser.add_argument("--limit", type=int, default=20, help="Number of broker sync rows to inspect")
+    broker_reconcile_parser = subparsers.add_parser("broker-reconcile", help="Show lightweight reconcile drift against latest local run")
+    broker_reconcile_parser.add_argument("--limit", type=int, default=20, help="Number of rows to inspect when building reconcile preview")
     protection_status_parser = subparsers.add_parser("protection-status", help="Show protection mode state for one symbol/timeframe")
     protection_status_parser.add_argument("--symbol", required=True, help="Ticker symbol")
     protection_status_parser.add_argument("--timeframe", default="1d", help="Bar timeframe")
@@ -316,6 +320,14 @@ def main() -> None:
 
     if args.command == "broker-sync-detail":
         print(json.dumps(app.broker_sync_detail(sync_id=args.sync_id), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "broker-health":
+        print(json.dumps(app.broker_health(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "broker-reconcile":
+        print(json.dumps(app.broker_reconcile(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "protection-status":

@@ -1264,6 +1264,49 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </section>
 
         <section class="panel">
+          <h2 class="panel-title">Broker Health</h2>
+          <div class="panel-note">Freshness and latest status of the most recent broker snapshot</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Status</th>
+                  <th>Latest Sync</th>
+                  <th>Snapshot Age</th>
+                  <th>Age Threshold</th>
+                  <th>Stale</th>
+                  <th>Failed Syncs</th>
+                  <th>Runner</th>
+                  <th>Cycle</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="broker-health-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Broker Reconcile</h2>
+          <div class="panel-note">Lightweight drift preview between the latest local run snapshot and the latest broker snapshot</div>
+          <div id="broker-reconcile-meta" class="muted"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Local</th>
+                  <th>Broker</th>
+                  <th>Delta</th>
+                </tr>
+              </thead>
+              <tbody id="broker-reconcile-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Notification Owners</h2>
           <div class="panel-note">Who currently owns the alert queue and how much is still open</div>
           <div class="table-wrap">
@@ -1543,6 +1586,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Idle Runners", value: summary.idle_live_runners }},
         {{ label: "Broker Syncs", value: summary.total_broker_syncs }},
         {{ label: "Broker Sync Failed", value: summary.failed_broker_syncs }},
+        {{ label: "Broker Stale", value: summary.stale_broker_syncs }},
+        {{ label: "Broker Drift", value: summary.broker_reconcile_mismatches }},
         {{ label: "Broker Provider", value: summary.latest_broker_provider || "-" }},
         {{ label: "Broker Equity", value: summary.latest_broker_equity }},
         {{ label: "Broker Cash", value: summary.latest_broker_cash }},
@@ -2107,6 +2152,33 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(row.breach_seconds)}}</td>
         </tr>
       `).join("") : '<tr><td colspan="9" class="muted">No SLA-breached notifications in the current view.</td></tr>';
+      const brokerHealth = payload.broker_health || {{}};
+      document.getElementById("broker-health-table").innerHTML = brokerHealth.latest_sync_id ? `
+        <tr class="${{brokerHealth.failed || brokerHealth.stale ? "row-anomaly" : ""}}">
+          <td>${{brokerHealth.latest_provider || ""}}</td>
+          <td>${{brokerHealth.latest_status || ""}}</td>
+          <td>${{brokerHealth.latest_synced_at || ""}}</td>
+          <td>${{fmt(brokerHealth.snapshot_age_seconds || 0)}}</td>
+          <td>${{fmt(brokerHealth.max_snapshot_age_seconds || 0)}}</td>
+          <td>${{brokerHealth.stale ? "yes" : "no"}}</td>
+          <td>${{fmt(brokerHealth.failed_sync_count || 0)}}</td>
+          <td>${{brokerHealth.latest_runner_id || ""}}</td>
+          <td>${{brokerHealth.latest_cycle_id || ""}}</td>
+          <td>${{brokerHealth.detail || ""}}</td>
+        </tr>
+      ` : '<tr><td colspan="10" class="muted">No broker health rows in the current view.</td></tr>';
+      const brokerReconcile = payload.broker_reconcile || {{}};
+      document.getElementById("broker-reconcile-meta").textContent = brokerReconcile.latest_broker_sync_id
+        ? `Status: ${{brokerReconcile.status}} | Mismatches: ${{fmt(brokerReconcile.mismatch_count || 0)}} | Run: ${{brokerReconcile.latest_run_id || ""}} | Sync: ${{brokerReconcile.latest_broker_sync_id || ""}} | Note: ${{(brokerReconcile.notes || []).join("; ")}}`
+        : "No broker reconcile preview available.";
+      document.getElementById("broker-reconcile-table").innerHTML = (brokerReconcile.rows || []).length ? (brokerReconcile.rows || []).map(row => `
+        <tr class="${{Math.abs(row.delta || 0) > 0 ? "row-anomaly" : ""}}">
+          <td>${{row.metric}}</td>
+          <td>${{fmt(row.local_value)}}</td>
+          <td>${{fmt(row.broker_value)}}</td>
+          <td>${{fmt(row.delta)}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="4" class="muted">No broker reconcile rows in the current view.</td></tr>';
       const controllerIssues = (payload.controller_health?.issues || []);
       document.getElementById("controller-health-table").innerHTML = controllerIssues.length ? controllerIssues.map(issue => `
         <tr>

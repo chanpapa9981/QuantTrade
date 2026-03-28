@@ -777,6 +777,16 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"broker_syncs": repository.fetch_recent_broker_syncs(limit=limit)}
 
+    def broker_health(self, limit: int = 20) -> dict[str, object]:
+        """查看最近 broker 快照是否过旧或最近一次已失败。"""
+        history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
+        return {"broker_health": history_payload["broker_health"]}
+
+    def broker_reconcile(self, limit: int = 20) -> dict[str, object]:
+        """查看最新本地运行结果和最新 broker 快照之间的轻量差异预览。"""
+        history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
+        return {"broker_reconcile": history_payload["broker_reconcile"]}
+
     def live_runner_status(self, limit: int = 20) -> dict[str, object]:
         """查看 live runner 汇总状态。"""
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
@@ -1324,6 +1334,16 @@ class QuantTradeApp:
                 "repaired_resolution_acknowledgements": repository.count_notification_resolution_ack_backfill_candidates(),
                 "recovered_stale_executions": repository.count_stale_executions(),
             }
+            latest_run_detail = (
+                repository.fetch_run_detail(str(bundle["runs"][0].get("run_id", "")))
+                if bundle["runs"]
+                else None
+            )
+            latest_broker_sync_detail = (
+                repository.fetch_broker_sync_detail(str(bundle["broker_syncs"][0].get("sync_id", "")))
+                if bundle["broker_syncs"]
+                else None
+            )
             return build_history_payload(
                 bundle["runs"],
                 bundle["executions"],
@@ -1334,6 +1354,9 @@ class QuantTradeApp:
                 bundle["notification_events"],
                 notification_assignment_sla_seconds=self.settings.notification.assignment_sla_seconds,
                 notification_assignment_sla_overrides=self._notification_assignment_sla_overrides(),
+                broker_max_snapshot_age_seconds=self.settings.broker.max_snapshot_age_seconds,
+                latest_run_detail=latest_run_detail,
+                latest_broker_sync_detail=latest_broker_sync_detail,
                 runtime_reconcile_preview=runtime_reconcile_preview,
             )
 

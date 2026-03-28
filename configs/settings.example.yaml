@@ -57,6 +57,7 @@ broker:
   account_snapshot_path: var/broker/account.json
   positions_snapshot_path: var/broker/positions.json
   orders_snapshot_path: var/broker/orders.json
+  max_snapshot_age_seconds: 0
 
 notification:
   provider: telegram

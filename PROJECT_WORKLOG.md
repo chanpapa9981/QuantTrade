@@ -935,6 +935,30 @@
 | 未完成 | 真实 Schwab OAuth / API client、broker sync 与 live cycle 更深联动、本地订单与券商订单对账、回报驱动的状态同步 |
 | 备注 | 这一轮把系统从“只有本地执行视角”推进成了“开始具备外部券商快照视角”的实盘前置骨架 |
 
+### 2026-03-28 第 56 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 broker 同步不只是“看得到”，还要能回答“最近一次是不是失败了、这份快照是不是已经过旧了” |
+| 输入 | 已有 broker snapshot sync、CLI 和 history 面板，但控制器仍无法判断外部券商视图是否健康，operator 只能看到一行同步记录，却不能快速知道“还能不能信这份快照” |
+| 产出 | `broker.max_snapshot_age_seconds` 配置；`broker-health` CLI；history `broker_health` 结构与 `Broker Health` 面板；顶部 `Broker Stale` 摘要卡片；controller health 对 `failed_broker_sync` / `stale_broker_snapshot` 的联动；对应测试 |
+| 结果 | 现在系统可以直接判断最近 broker 快照是否失败、是否超过可接受年龄阈值，并把这些状态同时投射到 broker health 和 controller health 里，方便把“券商侧视图失真”当成一类真正的运行问题来处理 |
+| 为什么这么做 | 因为外部券商接入之后，最危险的情况往往不是“完全没有同步”，而是“同步过一次，但已经老了”或者“最近一次失败后还在拿旧数据做判断”。把 freshness 和 failure 变成显式健康项，后面做对账、live runner 和实盘保护时，控制器才有机会基于 broker 状态做出更谨慎的决定。 |
+| 未完成 | broker 快照与本地订单/持仓的自动对账、基于 drift 的保护模式触发、真实 Schwab 回报流接入、broker 级通知聚合 |
+| 备注 | 这一轮把 broker 只读骨架从“可同步”推进成了“可判断健康”的实盘前控制层 |
+
+### 2026-03-28 第 57 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 给 broker 只读骨架补上一层轻量 reconcile 预览，让系统能直接显示“本地最近一次运行”和“broker 最新快照”之间的 drift |
+| 输入 | 已有 broker sync 和 broker health，但 operator 仍需要自己在脑中拼接“本地账户快照”“本地 open order”“broker 持仓/订单”，才能判断两边有没有明显偏差 |
+| 产出 | `broker-reconcile` CLI；history `broker_reconcile` 结构与 `Broker Reconcile` 面板；对最新 run detail 与最新 broker sync detail 的 `equity / cash / open_positions / open_orders` 轻量差异比较；顶部 `Broker Drift` 摘要卡片；对应测试 |
+| 结果 | 现在系统可以直接展示本地最近一次运行与 broker 快照在关键指标上的差异，并给出 `aligned / drift / unavailable` 状态，不用再手工比对多个表 |
+| 为什么这么做 | 因为真实接券商之后，最常见的问题不是“完全没数据”，而是“本地以为是这样，broker 实际已经变成那样”。在正式做严格对账前，先把轻量 drift 预览补上，可以让系统尽早具备“发现偏差”的能力，也能帮助后续设计更细的 protection 和同步策略。 |
+| 未完成 | 更严格的订单/持仓映射规则、按阈值触发 drift 告警、实盘 broker 回报驱动的增量对账、对账异常的自动恢复动作 |
+| 备注 | 这一轮把 broker 线从“健康检查”推进成了“轻量对账预览”，更接近真实准实盘系统需要的控制能力 |
+
 ---
 
 ## 10. 完整项目搭建观察框架
