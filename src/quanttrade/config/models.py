@@ -75,6 +75,7 @@ class ExecutionConfig:
     retry_backoff_multiplier: float = 2.0
     max_retry_backoff_seconds: float = 30.0
     protection_mode_failure_threshold: int = 2
+    protection_mode_cooldown_seconds: int = 0
     skip_run_on_protection_mode: bool = True
 
 

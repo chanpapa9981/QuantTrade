@@ -64,6 +64,8 @@ def _format_config_sections(
                 {"label": "max_fill_ratio_per_bar", "value": execution.get("max_fill_ratio_per_bar", 0.0)},
                 {"label": "open_order_timeout_bars", "value": execution.get("open_order_timeout_bars", 0)},
                 {"label": "max_retry_attempts", "value": execution.get("max_retry_attempts", 0)},
+                {"label": "protection_mode_failure_threshold", "value": execution.get("protection_mode_failure_threshold", 0)},
+                {"label": "protection_mode_cooldown_seconds", "value": execution.get("protection_mode_cooldown_seconds", 0)},
                 {
                     "label": "skip_run_on_protection_mode",
                     "value": execution.get("skip_run_on_protection_mode", False),
@@ -190,6 +192,8 @@ def _build_execution_requests(executions: list[dict[str, object]]) -> list[dict[
                 "retried": len(ordered) > 1,
                 "blocked": last.get("status") == "blocked",
                 "protection_mode_seen": any(bool(item.get("protection_mode")) for item in ordered),
+                "cooldown_active": bool(last.get("protection_mode") and str(last.get("protection_cooldown_until", "")).strip()),
+                "protection_cooldown_until": str(last.get("protection_cooldown_until", "") or ""),
                 "requested_at": first.get("requested_at", ""),
                 "last_updated_at": last.get("finished_at") or last.get("started_at", ""),
                 "retry_scheduled_count": retry_scheduled_count,
@@ -345,6 +349,7 @@ def build_history_payload(
             "critical_execution_requests": len(
                 [item for item in execution_requests if item.get("health_label") == "critical"]
             ),
+            "cooldown_protected_requests": len([item for item in execution_requests if item.get("cooldown_active")]),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),

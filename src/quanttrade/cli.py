@@ -58,6 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     execution_detail_parser.add_argument("--execution-id", required=True, help="Execution attempt id")
     execution_request_detail_parser = subparsers.add_parser("execution-request-detail", help="Show one request-level execution chain detail")
     execution_request_detail_parser.add_argument("--request-id", required=True, help="Execution request id")
+    protection_status_parser = subparsers.add_parser("protection-status", help="Show protection mode state for one symbol/timeframe")
+    protection_status_parser.add_argument("--symbol", required=True, help="Ticker symbol")
+    protection_status_parser.add_argument("--timeframe", default="1d", help="Bar timeframe")
     run_detail_parser = subparsers.add_parser("run-detail", help="Show one persisted backtest run detail")
     run_detail_parser.add_argument("--run-id", required=True, help="Persisted run id")
     orders_parser = subparsers.add_parser("orders", help="List recent persisted order events")
@@ -175,6 +178,10 @@ def main() -> None:
 
     if args.command == "execution-request-detail":
         print(json.dumps(app.execution_request_detail(request_id=args.request_id), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "protection-status":
+        print(json.dumps(app.protection_status(symbol=args.symbol, timeframe=args.timeframe), indent=2, ensure_ascii=False))
         return
 
     if args.command == "run-detail":

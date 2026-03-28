@@ -12,7 +12,7 @@ from quanttrade.app import QuantTradeApp
 from quanttrade.core.exceptions import NonRetryableExecutionError, RetryableExecutionError
 from quanttrade.data.repository import BacktestRunRepository
 from quanttrade.data.schema import create_schema
-from quanttrade.data.storage import LockUnavailableError, database_lock, execution_lock
+from quanttrade.data.storage import LockUnavailableError, connect_database, database_lock, execution_lock
 
 
 class DataImportAndBacktestTestCase(unittest.TestCase):
@@ -28,6 +28,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         retry_backoff_multiplier: float = 2.0,
         max_retry_backoff_seconds: float = 30.0,
         protection_mode_failure_threshold: int = 2,
+        protection_mode_cooldown_seconds: int = 0,
         skip_run_on_protection_mode: bool = True,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
@@ -53,6 +54,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  retry_backoff_multiplier: {retry_backoff_multiplier}",
                     f"  max_retry_backoff_seconds: {max_retry_backoff_seconds}",
                     f"  protection_mode_failure_threshold: {protection_mode_failure_threshold}",
+                    f"  protection_mode_cooldown_seconds: {protection_mode_cooldown_seconds}",
                     f"  skip_run_on_protection_mode: {'true' if skip_run_on_protection_mode else 'false'}",
                 ]
             ),
@@ -110,6 +112,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         recent_executions = app.recent_backtest_executions(limit=5)
         request_detail = app.execution_request_detail(request_id=persist_result["request_id"])
         execution_detail = app.execution_detail(execution_id=persist_result["execution_id"])
+        protection_status = app.protection_status(symbol="AAPL", timeframe="1d")
         run_detail = app.backtest_run_detail(run_id=persist_result["run_id"])
         recent_orders = app.recent_order_events(limit=5)
         order_detail = app.order_detail(order_id=run_detail["detail"]["orders"][0]["order_id"])
@@ -170,6 +173,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(execution_detail["detail"]["execution"]["attempt_number"], 1)
         self.assertFalse(execution_detail["detail"]["execution"]["protection_mode"])
         self.assertEqual(execution_detail["detail"]["execution"]["retry_decision"], "completed")
+        self.assertFalse(protection_status["protection"]["active"])
+        self.assertEqual(protection_status["protection"]["consecutive_failures"], 0)
         self.assertEqual(execution_detail["detail"]["run"]["run_id"], persist_result["run_id"])
         self.assertIsNotNone(run_detail["detail"])
         self.assertIn("account_snapshot", run_detail["detail"])
@@ -503,6 +508,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertTrue(recent_request_chains["requests"][0]["blocked"])
         self.assertEqual(recent_request_chains["requests"][0]["health_label"], "critical")
         self.assertEqual(recent_request_chains["requests"][0]["dominant_failure_class"], "ProtectionMode")
+        self.assertFalse(recent_request_chains["requests"][0]["cooldown_active"])
         self.assertTrue(request_detail["detail"]["request"]["blocked"])
         self.assertEqual(request_detail["detail"]["request"]["health_label"], "critical")
         self.assertEqual(recent_executions["executions"][0]["request_id"], blocked_result["request_id"])
@@ -530,6 +536,147 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(app._compute_retry_backoff_seconds(1), 1.5)
         self.assertEqual(app._compute_retry_backoff_seconds(2), 4.5)
         self.assertEqual(app._compute_retry_backoff_seconds(3), 10.0)
+
+    def test_execution_enters_cooldown_based_protection_mode(self) -> None:
+        """验证连续失败达到阈值且仍在冷却窗口内时，新 execution 会带上 cooldown 信息。"""
+        base_dir = Path("var/test-artifacts/protection-cooldown-active")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "cooldown-active.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            protection_mode_failure_threshold=2,
+            protection_mode_cooldown_seconds=3600,
+        )
+        app = QuantTradeApp(str(config_path))
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            first = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+                protection_mode_failure_threshold=2,
+                protection_mode_cooldown_seconds=3600,
+            )
+            repository.mark_execution_failed(first, "first cooldown failure")
+            second = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+                protection_mode_failure_threshold=2,
+                protection_mode_cooldown_seconds=3600,
+            )
+            repository.mark_execution_failed(second, "second cooldown failure")
+            third = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+                protection_mode_failure_threshold=2,
+                protection_mode_cooldown_seconds=3600,
+            )
+            detail = repository.fetch_execution_detail(third)
+
+        self.assertIsNotNone(detail)
+        self.assertTrue(detail["execution"]["protection_mode"])
+        self.assertIn("cooldown active until", detail["execution"]["protection_reason"])
+        self.assertTrue(detail["execution"]["protection_cooldown_until"])
+        protection_status = app.protection_status(symbol="AAPL", timeframe="1d")
+        self.assertTrue(protection_status["protection"]["active"])
+        self.assertTrue(protection_status["protection"]["protection_cooldown_until"])
+
+    def test_persist_backtest_run_resumes_after_protection_cooldown_expires(self) -> None:
+        """验证冷却窗口过期后，即使之前连续失败，系统也会允许新的回测重新启动。"""
+        base_dir = Path("var/test-artifacts/protection-cooldown-expired")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "cooldown-expired.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 8, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(30):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.7, 2),
+                        "high": round(price + 0.6, 2),
+                        "low": round(price - 1.0, 2),
+                        "close": round(price, 2),
+                        "volume": 2_200_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(
+            config_path,
+            db_path,
+            protection_mode_failure_threshold=2,
+            protection_mode_cooldown_seconds=300,
+            skip_run_on_protection_mode=True,
+        )
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            first = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+                protection_mode_failure_threshold=2,
+                protection_mode_cooldown_seconds=300,
+            )
+            repository.mark_execution_failed(first, "first old failure")
+            second = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+                protection_mode_failure_threshold=2,
+                protection_mode_cooldown_seconds=300,
+            )
+            repository.mark_execution_failed(second, "second old failure")
+
+            connection = connect_database(str(db_path))
+            try:
+                old_time = datetime(2024, 1, 1, tzinfo=timezone.utc).isoformat()
+                connection.execute(
+                    """
+                    UPDATE backtest_executions
+                    SET requested_at = ?, started_at = ?, finished_at = ?
+                    WHERE execution_id IN (?, ?)
+                    """,
+                    (old_time, old_time, old_time, first, second),
+                )
+            finally:
+                connection.close()
+
+        persist_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        protection_status = app.protection_status(symbol="AAPL", timeframe="1d")
+
+        self.assertEqual(persist_result["status"], "completed")
+        self.assertFalse(persist_result["execution"]["protection_mode"])
+        self.assertIn("protection cooldown expired", persist_result["execution"]["protection_reason"])
+        self.assertTrue(persist_result["execution"]["protection_cooldown_until"])
+        self.assertFalse(protection_status["protection"]["active"])
+        self.assertEqual(protection_status["protection"]["latest_execution_status"], "completed")
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""

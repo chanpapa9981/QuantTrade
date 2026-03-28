@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from quanttrade.core.types import MarketBar
@@ -110,6 +110,96 @@ class BacktestRunRepository:
                 count += 1
         return count
 
+    def _latest_abnormal_execution_reference(
+        self,
+        connection: object,
+        symbol: str,
+        timeframe: str,
+    ) -> dict[str, str] | None:
+        """读取最近一次异常 execution，用来推导保护模式冷却窗口。"""
+        row = connection.execute(
+            """
+            SELECT execution_id, status, COALESCE(finished_at, started_at, '') AS reference_at
+            FROM backtest_executions
+            WHERE symbol = ? AND timeframe = ? AND status != ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (symbol, timeframe, "completed"),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "execution_id": str(row[0]),
+            "status": str(row[1]),
+            "reference_at": str(row[2] or ""),
+        }
+
+    def _protection_mode_state(
+        self,
+        connection: object,
+        symbol: str,
+        timeframe: str,
+        protection_mode_failure_threshold: int,
+        protection_mode_cooldown_seconds: int,
+    ) -> dict[str, object]:
+        """根据连续失败和冷却窗口，判断下一次 execution 启动是否仍应被保护模式拦截。"""
+        consecutive_failures = self._consecutive_failure_count(connection, symbol, timeframe)
+        threshold = max(int(protection_mode_failure_threshold), 1)
+        cooldown_seconds = max(int(protection_mode_cooldown_seconds), 0)
+        if consecutive_failures < threshold:
+            return {
+                "consecutive_failures": consecutive_failures,
+                "protection_mode": 0,
+                "protection_reason": "",
+                "protection_cooldown_until": "",
+            }
+
+        if cooldown_seconds <= 0:
+            return {
+                "consecutive_failures": consecutive_failures,
+                "protection_mode": 1,
+                "protection_reason": f"entered protection mode after {threshold} consecutive failed executions",
+                "protection_cooldown_until": "",
+            }
+
+        latest_abnormal = self._latest_abnormal_execution_reference(connection, symbol, timeframe)
+        if latest_abnormal is None or not latest_abnormal.get("reference_at"):
+            return {
+                "consecutive_failures": consecutive_failures,
+                "protection_mode": 1,
+                "protection_reason": (
+                    f"entered protection mode after {threshold} consecutive failed executions; "
+                    "cooldown reference time was unavailable"
+                ),
+                "protection_cooldown_until": "",
+            }
+
+        reference_at = datetime.fromisoformat(str(latest_abnormal["reference_at"]))
+        cooldown_until = reference_at + timedelta(seconds=cooldown_seconds)
+        cooldown_until_iso = cooldown_until.isoformat()
+        now = datetime.now(UTC)
+        if cooldown_until > now:
+            return {
+                "consecutive_failures": consecutive_failures,
+                "protection_mode": 1,
+                "protection_reason": (
+                    f"entered protection mode after {threshold} consecutive failed executions; "
+                    f"cooldown active until {cooldown_until_iso}"
+                ),
+                "protection_cooldown_until": cooldown_until_iso,
+            }
+
+        return {
+            "consecutive_failures": consecutive_failures,
+            "protection_mode": 0,
+            "protection_reason": (
+                f"protection cooldown expired at {cooldown_until_iso}; "
+                f"allowing resume after {consecutive_failures} consecutive failed executions"
+            ),
+            "protection_cooldown_until": cooldown_until_iso,
+        }
+
     @staticmethod
     def _execution_select_clause(connection: object) -> str:
         """根据数据库当前实际列，构造兼容新旧版本的 execution 查询字段。
@@ -140,6 +230,11 @@ class BacktestRunRepository:
             ),
             "protection_mode": "protection_mode" if "protection_mode" in columns else "0 AS protection_mode",
             "protection_reason": "protection_reason" if "protection_reason" in columns else "'' AS protection_reason",
+            "protection_cooldown_until": (
+                "protection_cooldown_until"
+                if "protection_cooldown_until" in columns
+                else "'' AS protection_cooldown_until"
+            ),
             "retryable": "retryable" if "retryable" in columns else "0 AS retryable",
             "retry_decision": "retry_decision" if "retry_decision" in columns else "'' AS retry_decision",
             "failure_class": "failure_class" if "failure_class" in columns else "'' AS failure_class",
@@ -161,6 +256,7 @@ class BacktestRunRepository:
             "consecutive_failures_before_start",
             "protection_mode",
             "protection_reason",
+            "protection_cooldown_until",
             "retryable",
             "retry_decision",
             "failure_class",
@@ -187,15 +283,16 @@ class BacktestRunRepository:
             "consecutive_failures_before_start": row[7],
             "protection_mode": bool(row[8]),
             "protection_reason": row[9],
-            "retryable": bool(row[10]),
-            "retry_decision": row[11],
-            "failure_class": row[12],
-            "status": row[13],
-            "requested_at": row[14],
-            "started_at": row[15],
-            "finished_at": row[16],
-            "run_id": row[17],
-            "error_message": row[18],
+            "protection_cooldown_until": row[10],
+            "retryable": bool(row[11]),
+            "retry_decision": row[12],
+            "failure_class": row[13],
+            "status": row[14],
+            "requested_at": row[15],
+            "started_at": row[16],
+            "finished_at": row[17],
+            "run_id": row[18],
+            "error_message": row[19],
         }
 
     @staticmethod
@@ -287,6 +384,10 @@ class BacktestRunRepository:
             "retried": len(ordered) > 1,
             "blocked": latest["status"] == "blocked",
             "protection_mode_seen": any(bool(item.get("protection_mode")) for item in ordered),
+            "cooldown_active": bool(
+                latest.get("protection_mode") and str(latest.get("protection_cooldown_until", "")).strip()
+            ),
+            "protection_cooldown_until": str(latest.get("protection_cooldown_until", "") or ""),
             "requested_at": ordered[0]["requested_at"],
             "last_updated_at": latest["finished_at"] or latest["started_at"],
             "retry_scheduled_count": retry_scheduled_count,
@@ -306,6 +407,7 @@ class BacktestRunRepository:
         initial_equity: float,
         recovered_execution_count: int = 0,
         protection_mode_failure_threshold: int = 2,
+        protection_mode_cooldown_seconds: int = 0,
     ) -> str:
         """创建一条新的回测执行记录。
 
@@ -325,22 +427,21 @@ class BacktestRunRepository:
                 (symbol, timeframe),
             ).fetchone()
             attempt_number = int(attempt_row[0]) + 1 if attempt_row else 1
-            consecutive_failures = self._consecutive_failure_count(connection, symbol, timeframe)
-            threshold = max(int(protection_mode_failure_threshold), 1)
-            protection_mode = 1 if consecutive_failures >= threshold else 0
-            protection_reason = (
-                f"entered protection mode after {threshold} consecutive failed executions"
-                if protection_mode
-                else ""
+            protection_state = self._protection_mode_state(
+                connection,
+                symbol,
+                timeframe,
+                protection_mode_failure_threshold=protection_mode_failure_threshold,
+                protection_mode_cooldown_seconds=protection_mode_cooldown_seconds,
             )
             connection.execute(
                 """
                 INSERT INTO backtest_executions (
                     execution_id, request_id, symbol, timeframe, initial_equity, attempt_number,
                     recovered_execution_count, consecutive_failures_before_start,
-                    protection_mode, protection_reason, status,
+                    protection_mode, protection_reason, protection_cooldown_until, status,
                     requested_at, started_at, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     execution_id,
@@ -350,9 +451,10 @@ class BacktestRunRepository:
                     initial_equity,
                     attempt_number,
                     recovered_execution_count,
-                    consecutive_failures,
-                    protection_mode,
-                    protection_reason,
+                    protection_state["consecutive_failures"],
+                    protection_state["protection_mode"],
+                    protection_state["protection_reason"],
+                    protection_state["protection_cooldown_until"],
                     "running",
                     started_at,
                     started_at,
@@ -656,7 +758,7 @@ class BacktestRunRepository:
             if execution_row is None:
                 return None
             run_row = None
-            run_id = execution_row[17]
+            run_id = execution_row[18]
             if run_id and "backtest_runs" in table_names:
                 run_row = connection.execute(
                     """
@@ -750,6 +852,76 @@ class BacktestRunRepository:
         summaries = [self._summarize_execution_request(request_id, attempts) for request_id, attempts in grouped.items()]
         summaries.sort(key=lambda item: str(item.get("last_updated_at", "")), reverse=True)
         return summaries[:limit]
+
+    def fetch_protection_status(self, symbol: str, timeframe: str) -> dict[str, object]:
+        """查询某个标的/周期当前的保护模式状态，而不需要触发新的回测。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "backtest_executions" for table in tables):
+                return {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "has_history": False,
+                    "active": False,
+                    "consecutive_failures": 0,
+                    "latest_execution_id": "",
+                    "latest_execution_status": "",
+                    "latest_execution_at": "",
+                    "latest_abnormal_execution_id": "",
+                    "latest_abnormal_status": "",
+                    "latest_abnormal_at": "",
+                    "protection_reason": "",
+                    "protection_cooldown_until": "",
+                }
+            latest_row = connection.execute(
+                """
+                SELECT execution_id, status, COALESCE(finished_at, started_at, '') AS reference_at,
+                       protection_mode, protection_reason, protection_cooldown_until
+                FROM backtest_executions
+                WHERE symbol = ? AND timeframe = ?
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (symbol, timeframe),
+            ).fetchone()
+            latest_abnormal = self._latest_abnormal_execution_reference(connection, symbol, timeframe)
+            consecutive_failures = self._consecutive_failure_count(connection, symbol, timeframe)
+        finally:
+            connection.close()
+
+        if latest_row is None:
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "has_history": False,
+                "active": False,
+                "consecutive_failures": consecutive_failures,
+                "latest_execution_id": "",
+                "latest_execution_status": "",
+                "latest_execution_at": "",
+                "latest_abnormal_execution_id": "",
+                "latest_abnormal_status": "",
+                "latest_abnormal_at": "",
+                "protection_reason": "",
+                "protection_cooldown_until": "",
+            }
+
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "has_history": True,
+            "active": bool(latest_row[3]),
+            "consecutive_failures": consecutive_failures,
+            "latest_execution_id": str(latest_row[0] or ""),
+            "latest_execution_status": str(latest_row[1] or ""),
+            "latest_execution_at": str(latest_row[2] or ""),
+            "latest_abnormal_execution_id": str(latest_abnormal["execution_id"]) if latest_abnormal else "",
+            "latest_abnormal_status": str(latest_abnormal["status"]) if latest_abnormal else "",
+            "latest_abnormal_at": str(latest_abnormal["reference_at"]) if latest_abnormal else "",
+            "protection_reason": str(latest_row[4] or ""),
+            "protection_cooldown_until": str(latest_row[5] or ""),
+        }
 
     def fetch_run_detail(self, run_id: str) -> dict[str, object] | None:
         """查询某次回测的完整详情。"""

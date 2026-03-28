@@ -917,6 +917,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Attempts</th>
                   <th>Retried</th>
                   <th>Protected</th>
+                  <th>Cooldown Until</th>
                   <th>Failure Mix</th>
                   <th>Decision Path</th>
                   <th>Path</th>
@@ -974,6 +975,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Recovered</th>
                   <th>Failures Before</th>
                   <th>Protection</th>
+                  <th>Cooldown Until</th>
                   <th>Retry</th>
                   <th>Failure Class</th>
                 </tr>
@@ -999,6 +1001,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Attempt</th>
                   <th>Run ID</th>
                   <th>Protection</th>
+                  <th>Cooldown Until</th>
                   <th>Retry</th>
                   <th>Failure Class</th>
                   <th>Reason</th>
@@ -1112,6 +1115,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Recovered</th>
                   <th>Failures Before</th>
                   <th>Protection</th>
+                  <th>Cooldown Until</th>
                   <th>Retry</th>
                   <th>Failure Class</th>
                   <th>Reason</th>
@@ -1279,6 +1283,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Retried Requests", value: summary.retried_execution_requests }},
         {{ label: "Anomalous Requests", value: summary.anomalous_execution_requests }},
         {{ label: "Critical Requests", value: summary.critical_execution_requests }},
+        {{ label: "Cooldown Active", value: summary.cooldown_protected_requests }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
@@ -1347,6 +1352,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(request.attempt_count)}}</td>
           <td>${{request.retried ? "yes" : "no"}}</td>
           <td>${{request.protection_mode_seen ? "yes" : "no"}}</td>
+          <td>${{request.protection_cooldown_until || ""}}</td>
           <td>${{formatFailureMix(request)}}</td>
           <td>${{request.decision_path || ""}}</td>
           <td>${{request.attempt_path}}</td>
@@ -1397,7 +1403,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         state.executionId = attempts[attempts.length - 1]?.execution_id ?? state.executionId;
       }}
       document.getElementById("request-detail-meta").textContent = request
-        ? `Request ${{request.request_id}} | Health: ${{request.health_label}} | Anomaly Score: ${{request.anomaly_score || 0}} | Final: ${{request.final_status}} | Attempts: ${{request.attempt_count}} | Retried: ${{request.retried ? "yes" : "no"}} | Protected: ${{request.protection_mode_seen ? "yes" : "no"}} | Failure Mix: ${{formatFailureMix(request)}}`
+        ? `Request ${{request.request_id}} | Health: ${{request.health_label}} | Anomaly Score: ${{request.anomaly_score || 0}} | Final: ${{request.final_status}} | Attempts: ${{request.attempt_count}} | Retried: ${{request.retried ? "yes" : "no"}} | Protected: ${{request.protection_mode_seen ? "yes" : "no"}} | Cooldown Until: ${{request.protection_cooldown_until || ""}} | Failure Mix: ${{formatFailureMix(request)}}`
         : "No request selected.";
       document.getElementById("request-detail-table").innerHTML = attempts.map(attempt => `
         <tr class="${{state.executionId === attempt.execution_id ? "row-active" : ""}}">
@@ -1407,6 +1413,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(attempt.attempt_number)}}</td>
           <td>${{attempt.run_id || ""}}</td>
           <td>${{attempt.protection_mode ? "on" : "off"}}</td>
+          <td>${{attempt.protection_cooldown_until || ""}}</td>
           <td>${{attempt.retry_decision || ""}}</td>
           <td>${{attempt.failure_class || ""}}</td>
           <td>${{attempt.error_message || attempt.protection_reason || ""}}</td>
@@ -1441,6 +1448,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(execution.recovered_execution_count)}}</td>
           <td>${{fmt(execution.consecutive_failures_before_start)}}</td>
           <td>${{execution.protection_mode ? "on" : "off"}}</td>
+          <td>${{execution.protection_cooldown_until || ""}}</td>
           <td>${{execution.retry_decision || ""}}</td>
           <td>${{execution.failure_class || ""}}</td>
         </tr>
@@ -1463,7 +1471,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       // 详情面板把一次执行尝试的“控制器级状态”摊开，便于判断是否要继续追订单层。
       const execution = findExecution(state.executionId);
       document.getElementById("execution-detail-meta").textContent = execution
-        ? `Execution ${{execution.execution_id}} | Request: ${{execution.request_id || ""}} | Status: ${{execution.status}} | Attempt: ${{execution.attempt_number}} | Retry: ${{execution.retry_decision || ""}} | Failure Class: ${{execution.failure_class || ""}} | Recovered Starts: ${{execution.recovered_execution_count}} | Failures Before Start: ${{execution.consecutive_failures_before_start}} | Protection: ${{execution.protection_mode ? "on" : "off"}}`
+        ? `Execution ${{execution.execution_id}} | Request: ${{execution.request_id || ""}} | Status: ${{execution.status}} | Attempt: ${{execution.attempt_number}} | Retry: ${{execution.retry_decision || ""}} | Failure Class: ${{execution.failure_class || ""}} | Recovered Starts: ${{execution.recovered_execution_count}} | Failures Before Start: ${{execution.consecutive_failures_before_start}} | Protection: ${{execution.protection_mode ? "on" : "off"}} | Cooldown Until: ${{execution.protection_cooldown_until || ""}}`
         : "No execution selected.";
       document.getElementById("execution-detail-table").innerHTML = execution ? `
         <tr>
@@ -1475,6 +1483,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(execution.recovered_execution_count)}}</td>
           <td>${{fmt(execution.consecutive_failures_before_start)}}</td>
           <td>${{execution.protection_mode ? "on" : "off"}}</td>
+          <td>${{execution.protection_cooldown_until || ""}}</td>
           <td>${{execution.retry_decision || ""}}</td>
           <td>${{execution.failure_class || ""}}</td>
           <td>${{execution.error_message || execution.protection_reason || ""}}</td>

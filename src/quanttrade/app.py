@@ -192,6 +192,7 @@ class QuantTradeApp:
         max_retry_attempts = max(int(self.settings.execution.max_retry_attempts), 1)
         retry_backoff_strategy = str(self.settings.execution.retry_backoff_strategy or "linear").strip().lower()
         protection_threshold = max(int(self.settings.execution.protection_mode_failure_threshold), 1)
+        protection_cooldown_seconds = max(int(self.settings.execution.protection_mode_cooldown_seconds), 0)
         skip_run_on_protection_mode = bool(self.settings.execution.skip_run_on_protection_mode)
         request_id = str(uuid4())
         execution_id = ""
@@ -223,10 +224,20 @@ class QuantTradeApp:
                         initial_equity=initial_equity,
                         recovered_execution_count=recovered_executions,
                         protection_mode_failure_threshold=protection_threshold,
+                        protection_mode_cooldown_seconds=protection_cooldown_seconds,
                     )
                     execution_detail = repository.fetch_execution_detail(execution_id)
 
                 execution = execution_detail["execution"] if execution_detail else {}
+                if (not execution.get("protection_mode")) and str(execution.get("protection_reason", "")).startswith(
+                    "protection cooldown expired"
+                ):
+                    LOGGER.info(
+                        "resuming backtest request_id=%s execution_id=%s after protection cooldown expired: %s",
+                        request_id,
+                        execution_id,
+                        execution.get("protection_reason", ""),
+                    )
                 if execution.get("protection_mode") and skip_run_on_protection_mode:
                     LOGGER.warning(
                         "blocking backtest request_id=%s execution_id=%s because protection mode is active: %s",
@@ -369,6 +380,12 @@ class QuantTradeApp:
         with database_lock(self.settings.data.duckdb_path):
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"detail": repository.fetch_execution_request_detail(request_id=request_id)}
+
+    def protection_status(self, symbol: str, timeframe: str = "1d") -> dict[str, object]:
+        """查询某个标的/周期当前是否处于保护模式，以及冷却窗口是否仍在生效。"""
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"protection": repository.fetch_protection_status(symbol=symbol, timeframe=timeframe)}
 
     def backtest_run_detail(self, run_id: str) -> dict[str, object]:
         """查询某次回测的完整明细。"""

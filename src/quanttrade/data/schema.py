@@ -94,6 +94,7 @@ def create_schema(db_path: str) -> None:
                 consecutive_failures_before_start INTEGER NOT NULL DEFAULT 0,
                 protection_mode INTEGER NOT NULL DEFAULT 0,
                 protection_reason TEXT NOT NULL DEFAULT '',
+                protection_cooldown_until TEXT NOT NULL DEFAULT '',
                 retryable INTEGER NOT NULL DEFAULT 0,
                 retry_decision TEXT NOT NULL DEFAULT '',
                 failure_class TEXT NOT NULL DEFAULT '',
@@ -121,6 +122,7 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS consecutive_failures_before_start INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS protection_mode INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS protection_reason TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS protection_cooldown_until TEXT DEFAULT '';")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS retryable INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS retry_decision TEXT DEFAULT '';")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS failure_class TEXT DEFAULT '';")
