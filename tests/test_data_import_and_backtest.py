@@ -57,6 +57,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         live_runner_id: str = "local-default",
         live_poll_interval_seconds: float = 0.0,
         live_max_cycles_per_run: int = 1,
+        broker_enabled: bool = False,
+        broker_provider: str = "local_file",
+        broker_account_snapshot_path: str = "var/broker/account.json",
+        broker_positions_snapshot_path: str = "var/broker/positions.json",
+        broker_orders_snapshot_path: str = "var/broker/orders.json",
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -92,6 +97,12 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  runner_id: {live_runner_id}",
                     f"  poll_interval_seconds: {live_poll_interval_seconds}",
                     f"  max_cycles_per_run: {live_max_cycles_per_run}",
+                    "broker:",
+                    f"  enabled: {'true' if broker_enabled else 'false'}",
+                    f"  provider: {broker_provider}",
+                    f"  account_snapshot_path: {broker_account_snapshot_path}",
+                    f"  positions_snapshot_path: {broker_positions_snapshot_path}",
+                    f"  orders_snapshot_path: {broker_orders_snapshot_path}",
                     "notification:",
                     f"  provider: {notification_provider}",
                     f"  enabled: {'true' if notification_enabled else 'false'}",
@@ -115,6 +126,75 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+
+    def _write_broker_snapshots(self, base_dir: Path) -> tuple[Path, Path, Path]:
+        """生成本地 broker fixture，模拟真实券商返回的账户/持仓/订单快照。"""
+        broker_dir = base_dir / "broker"
+        broker_dir.mkdir(parents=True, exist_ok=True)
+        account_path = broker_dir / "account.json"
+        positions_path = broker_dir / "positions.json"
+        orders_path = broker_dir / "orders.json"
+        account_path.write_text(
+            json.dumps(
+                {
+                    "account_id": "paper-account",
+                    "currency": "USD",
+                    "equity": 125000.5,
+                    "cash": 48250.25,
+                    "buying_power": 240000.0,
+                    "source_updated_at": datetime(2026, 3, 28, tzinfo=timezone.utc).isoformat(),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        positions_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "symbol": "AAPL",
+                        "quantity": 120,
+                        "market_price": 192.5,
+                        "average_cost": 180.0,
+                        "market_value": 23100.0,
+                        "unrealized_pnl": 1500.0,
+                        "source_updated_at": datetime(2026, 3, 28, tzinfo=timezone.utc).isoformat(),
+                    },
+                    {
+                        "symbol": "MSFT",
+                        "quantity": 50,
+                        "market_price": 410.0,
+                        "average_cost": 401.0,
+                        "market_value": 20500.0,
+                        "unrealized_pnl": 450.0,
+                        "source_updated_at": datetime(2026, 3, 28, tzinfo=timezone.utc).isoformat(),
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        orders_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "broker_order_id": "broker-order-1",
+                        "symbol": "AAPL",
+                        "side": "BUY",
+                        "status": "working",
+                        "quantity": 120,
+                        "filled_quantity": 60,
+                        "limit_price": 191.8,
+                        "stop_price": 0.0,
+                        "submitted_at": datetime(2026, 3, 28, 1, tzinfo=timezone.utc).isoformat(),
+                        "source_updated_at": datetime(2026, 3, 28, 1, 30, tzinfo=timezone.utc).isoformat(),
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return account_path, positions_path, orders_path
 
     def test_import_csv_and_run_backtest(self) -> None:
         """验证导入、回测、导出、持久化、历史查询整条链路都能跑通。"""
@@ -2310,6 +2390,97 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(protection_status["protection"]["latest_execution_status"], "completed")
         self.assertEqual(recent_notifications["notifications"][0]["category"], "protection_resumed")
         self.assertTrue(outbox_path.exists())
+
+    def test_broker_sync_imports_local_snapshot_files(self) -> None:
+        """验证本地 broker 快照能被标准化、落库并完整查回。"""
+        base_dir = Path("var/test-artifacts/broker-sync")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "broker-sync.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        account_path, positions_path, orders_path = self._write_broker_snapshots(base_dir)
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(account_path),
+            broker_positions_snapshot_path=str(positions_path),
+            broker_orders_snapshot_path=str(orders_path),
+        )
+
+        app = QuantTradeApp(str(config_path))
+        sync_result = app.broker_sync(runner_id="paper-runner")
+        recent_syncs = app.recent_broker_syncs(limit=5)
+        detail = app.broker_sync_detail(sync_id=sync_result["detail"]["sync"]["sync_id"])
+
+        self.assertEqual(sync_result["status"], "completed")
+        self.assertEqual(sync_result["detail"]["sync"]["provider"], "local_file")
+        self.assertEqual(sync_result["detail"]["sync"]["account_id"], "paper-account")
+        self.assertEqual(sync_result["detail"]["sync"]["position_count"], 2)
+        self.assertEqual(sync_result["detail"]["sync"]["order_count"], 1)
+        self.assertEqual(sync_result["detail"]["sync"]["runner_id"], "paper-runner")
+        self.assertEqual(len(sync_result["detail"]["positions"]), 2)
+        self.assertEqual(len(sync_result["detail"]["orders"]), 1)
+        self.assertEqual(recent_syncs["broker_syncs"][0]["sync_id"], sync_result["detail"]["sync"]["sync_id"])
+        self.assertEqual(detail["detail"]["sync"]["sync_id"], sync_result["detail"]["sync"]["sync_id"])
+        self.assertEqual(detail["detail"]["positions"][0]["symbol"], "AAPL")
+        self.assertEqual(detail["detail"]["orders"][0]["broker_order_id"], "broker-order-1")
+
+    def test_history_payload_includes_recent_broker_syncs(self) -> None:
+        """验证 history payload 会把 broker 同步摘要和最近同步列表一起带给前端。"""
+        base_dir = Path("var/test-artifacts/broker-history")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "broker-history.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 8, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(12):
+                current = start + timedelta(days=offset)
+                price += 0.8
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.4, 2),
+                        "high": round(price + 0.5, 2),
+                        "low": round(price - 0.9, 2),
+                        "close": round(price, 2),
+                        "volume": 2_000_000 + offset * 1000,
+                    }
+                )
+
+        account_path, positions_path, orders_path = self._write_broker_snapshots(base_dir)
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(account_path),
+            broker_positions_snapshot_path=str(positions_path),
+            broker_orders_snapshot_path=str(orders_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+        app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        app.broker_sync(runner_id="paper-runner")
+
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=10)
+
+        self.assertIn("recent_broker_syncs", history_payload)
+        self.assertEqual(history_payload["history_summary"]["total_broker_syncs"], 1)
+        self.assertEqual(history_payload["history_summary"]["failed_broker_syncs"], 0)
+        self.assertEqual(history_payload["history_summary"]["latest_broker_provider"], "local_file")
+        self.assertEqual(history_payload["history_summary"]["latest_broker_positions"], 2)
+        self.assertEqual(history_payload["history_summary"]["latest_broker_orders"], 1)
+        self.assertGreater(history_payload["history_summary"]["latest_broker_equity"], 0.0)
+        self.assertEqual(history_payload["recent_broker_syncs"][0]["runner_id"], "paper-runner")
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""

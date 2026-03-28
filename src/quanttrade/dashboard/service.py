@@ -436,6 +436,32 @@ def _build_live_runner_summary(live_cycles: list[dict[str, object]]) -> list[dic
     return rows
 
 
+def _build_broker_sync_summary(broker_syncs: list[dict[str, object]]) -> dict[str, object]:
+    """把券商同步记录压缩成历史页顶部摘要。
+
+    券商同步和 execution/live cycle 不同：
+    - execution 关注“策略有没有跑起来”；
+    - broker sync 关注“外部账户状态有没有被成功拉回本地”。
+
+    所以这里单独做一个摘要，方便快速回答：
+    1. 最近有没有同步成功；
+    2. 最近一次账户权益是多少；
+    3. 最近一次同步对应多少持仓和订单。
+    """
+    latest = broker_syncs[0] if broker_syncs else {}
+    return {
+        "total_broker_syncs": len(broker_syncs),
+        "failed_broker_syncs": len([item for item in broker_syncs if item.get("status") == "failed"]),
+        "latest_broker_sync_status": str(latest.get("status", "")),
+        "latest_broker_provider": str(latest.get("provider", "")),
+        "latest_broker_equity": float(latest.get("equity", 0.0) or 0.0),
+        "latest_broker_cash": float(latest.get("cash", 0.0) or 0.0),
+        "latest_broker_positions": int(latest.get("position_count", 0) or 0),
+        "latest_broker_orders": int(latest.get("order_count", 0) or 0),
+        "latest_broker_synced_at": str(latest.get("synced_at", "")),
+    }
+
+
 def _build_notification_sla_summary(
     notification_events: list[dict[str, object]],
     assignment_sla_seconds: int,
@@ -683,6 +709,7 @@ def build_history_payload(
     runs: list[dict[str, object]],
     executions: list[dict[str, object]],
     live_cycles: list[dict[str, object]],
+    broker_syncs: list[dict[str, object]],
     orders: list[dict[str, object]],
     audit_events: list[dict[str, object]],
     notification_events: list[dict[str, object]],
@@ -700,6 +727,7 @@ def build_history_payload(
     notification_owner_summary = _build_notification_owner_summary(notification_events)
     notification_inbox = _build_notification_inbox(notification_events)
     live_runner_summary = _build_live_runner_summary(live_cycles)
+    broker_sync_summary = _build_broker_sync_summary(broker_syncs)
     notification_sla_summary = _build_notification_sla_summary(
         notification_events,
         assignment_sla_seconds=max(int(notification_assignment_sla_seconds), 0),
@@ -740,6 +768,15 @@ def build_history_payload(
             "running_live_cycles": len([item for item in live_cycles if item.get("status") == "running"]),
             "live_runners": len(live_runner_summary),
             "idle_live_runners": len([item for item in live_runner_summary if int(item.get("idle_streak", 0)) > 0]),
+            "total_broker_syncs": broker_sync_summary["total_broker_syncs"],
+            "failed_broker_syncs": broker_sync_summary["failed_broker_syncs"],
+            "latest_broker_sync_status": broker_sync_summary["latest_broker_sync_status"],
+            "latest_broker_provider": broker_sync_summary["latest_broker_provider"],
+            "latest_broker_equity": broker_sync_summary["latest_broker_equity"],
+            "latest_broker_cash": broker_sync_summary["latest_broker_cash"],
+            "latest_broker_positions": broker_sync_summary["latest_broker_positions"],
+            "latest_broker_orders": broker_sync_summary["latest_broker_orders"],
+            "latest_broker_synced_at": broker_sync_summary["latest_broker_synced_at"],
             "total_notifications": len(notification_events),
             "critical_notifications": len([item for item in notification_events if item.get("severity") == "critical"]),
             "queued_notifications": len([item for item in notification_events if item.get("delivery_status") == "queued"]),
@@ -838,6 +875,7 @@ def build_history_payload(
         "recent_executions": executions,
         "recent_live_cycles": live_cycles,
         "live_runner_summary": live_runner_summary[:8],
+        "recent_broker_syncs": broker_syncs,
         "notification_summary": notification_summary[:8],
         "notification_owner_summary": notification_owner_summary[:8],
         "notification_inbox": notification_inbox[:12],

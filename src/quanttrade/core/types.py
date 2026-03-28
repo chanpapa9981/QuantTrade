@@ -186,3 +186,49 @@ class OrderEvent:
     gross_value: float = 0.0
     net_value: float = 0.0
     reason: str = ""
+
+
+@dataclass(slots=True)
+class BrokerAccountSnapshot:
+    """券商账户快照。
+
+    当前阶段它主要服务“只读同步”和“对账前置准备”：
+    - 先把外部账户状态统一整理成一份标准结构；
+    - 后续无论接 Schwab 还是别的 broker，都尽量往这份结构对齐。
+    """
+
+    account_id: str
+    currency: str
+    equity: float
+    cash: float
+    buying_power: float = 0.0
+    source_updated_at: str = ""
+
+
+@dataclass(slots=True)
+class BrokerPositionSnapshot:
+    """券商持仓快照。"""
+
+    symbol: str
+    quantity: float
+    market_price: float
+    average_cost: float = 0.0
+    market_value: float = 0.0
+    unrealized_pnl: float = 0.0
+    source_updated_at: str = ""
+
+
+@dataclass(slots=True)
+class BrokerOrderSnapshot:
+    """券商订单快照。"""
+
+    broker_order_id: str
+    symbol: str
+    side: str
+    status: str
+    quantity: float
+    filled_quantity: float = 0.0
+    limit_price: float = 0.0
+    stop_price: float = 0.0
+    submitted_at: str = ""
+    source_updated_at: str = ""

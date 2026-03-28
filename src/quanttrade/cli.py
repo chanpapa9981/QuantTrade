@@ -75,6 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
     live_cycles_parser.add_argument("--limit", type=int, default=20, help="Number of live cycles to list")
     live_cycle_detail_parser = subparsers.add_parser("live-cycle-detail", help="Show one live runner cycle detail")
     live_cycle_detail_parser.add_argument("--cycle-id", required=True, help="Live cycle id")
+    broker_sync_parser = subparsers.add_parser("broker-sync", help="Run one read-only broker snapshot sync")
+    broker_sync_parser.add_argument("--runner-id", default="", help="Optional runner id recorded on the sync row")
+    broker_sync_parser.add_argument("--cycle-id", default="", help="Optional live cycle id linked to the sync row")
+    broker_syncs_parser = subparsers.add_parser("broker-syncs", help="List recent broker snapshot sync rows")
+    broker_syncs_parser.add_argument("--limit", type=int, default=20, help="Number of broker sync rows to list")
+    broker_sync_detail_parser = subparsers.add_parser("broker-sync-detail", help="Show one broker snapshot sync detail")
+    broker_sync_detail_parser.add_argument("--sync-id", required=True, help="Broker sync id")
     protection_status_parser = subparsers.add_parser("protection-status", help="Show protection mode state for one symbol/timeframe")
     protection_status_parser.add_argument("--symbol", required=True, help="Ticker symbol")
     protection_status_parser.add_argument("--timeframe", default="1d", help="Bar timeframe")
@@ -291,6 +298,24 @@ def main() -> None:
 
     if args.command == "live-cycle-detail":
         print(json.dumps(app.live_cycle_detail(cycle_id=args.cycle_id), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "broker-sync":
+        print(
+            json.dumps(
+                app.broker_sync(runner_id=args.runner_id, cycle_id=args.cycle_id),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if args.command == "broker-syncs":
+        print(json.dumps(app.recent_broker_syncs(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "broker-sync-detail":
+        print(json.dumps(app.broker_sync_detail(sync_id=args.sync_id), indent=2, ensure_ascii=False))
         return
 
     if args.command == "protection-status":

@@ -17,6 +17,11 @@ class HistoryHtmlTestCase(unittest.TestCase):
         db_path = base_dir / "history-html-test.duckdb"
         config_path = base_dir / "settings.yaml"
         output_path = base_dir / "history.html"
+        broker_dir = base_dir / "broker"
+        broker_dir.mkdir(parents=True, exist_ok=True)
+        account_path = broker_dir / "account.json"
+        positions_path = broker_dir / "positions.json"
+        orders_path = broker_dir / "orders.json"
         if db_path.exists():
             db_path.unlink()
 
@@ -39,6 +44,19 @@ class HistoryHtmlTestCase(unittest.TestCase):
                     }
                 )
 
+        account_path.write_text(
+            '{"account_id":"paper-account","currency":"USD","equity":123456.78,"cash":50234.12,"buying_power":220000.0}',
+            encoding="utf-8",
+        )
+        positions_path.write_text(
+            '[{"symbol":"AAPL","quantity":100,"market_price":190.5,"average_cost":180.0,"market_value":19050.0,"unrealized_pnl":1050.0}]',
+            encoding="utf-8",
+        )
+        orders_path.write_text(
+            '[{"broker_order_id":"broker-order-1","symbol":"AAPL","side":"BUY","status":"working","quantity":100,"filled_quantity":50,"limit_price":190.0,"submitted_at":"2026-03-28T00:00:00+00:00"}]',
+            encoding="utf-8",
+        )
+
         config_path.write_text(
             "\n".join(
                 [
@@ -52,6 +70,12 @@ class HistoryHtmlTestCase(unittest.TestCase):
                     "data:",
                     f"  duckdb_path: {db_path}",
                     "  backend: duckdb",
+                    "broker:",
+                    "  enabled: true",
+                    "  provider: local_file",
+                    f"  account_snapshot_path: {account_path}",
+                    f"  positions_snapshot_path: {positions_path}",
+                    f"  orders_snapshot_path: {orders_path}",
                 ]
             ),
             encoding="utf-8",
@@ -60,6 +84,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         app = QuantTradeApp(str(config_path))
         app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
         app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        app.broker_sync(runner_id="paper-runner")
         result = app.export_history_html(runs_limit=10, events_limit=10, output_path=str(output_path))
 
         self.assertEqual(result["output_path"], str(output_path))
@@ -79,6 +104,13 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Live Failed", html)
         self.assertIn("Live Runners", html)
         self.assertIn("Idle Runners", html)
+        self.assertIn("Broker Syncs", html)
+        self.assertIn("Broker Sync Failed", html)
+        self.assertIn("Broker Provider", html)
+        self.assertIn("Broker Equity", html)
+        self.assertIn("Broker Cash", html)
+        self.assertIn("Broker Positions", html)
+        self.assertIn("Broker Orders", html)
         self.assertIn("Retry Scheduled", html)
         self.assertIn("Top Failure Class", html)
         self.assertIn("Notifications", html)
@@ -107,6 +139,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Recent Executions", html)
         self.assertIn("Recent Live Cycles", html)
         self.assertIn("Live Runners", html)
+        self.assertIn("Recent Broker Syncs", html)
         self.assertIn("Execution Request Detail", html)
         self.assertIn("Execution Detail", html)
         self.assertIn("Request ID", html)
@@ -164,6 +197,10 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Breach Sec", html)
         self.assertIn("Silenced Until", html)
         self.assertIn("Owner", html)
+        self.assertIn("Provider", html)
+        self.assertIn("Synced At", html)
+        self.assertIn("Positions", html)
+        self.assertIn("Orders", html)
         self.assertIn("Assigned At", html)
         self.assertIn("Resolved At", html)
         self.assertIn("Reopened At", html)

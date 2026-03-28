@@ -1503,6 +1503,226 @@ class BacktestRunRepository:
             for row in rows
         ]
 
+    def save_broker_sync(
+        self,
+        *,
+        provider: str,
+        synced_at: str,
+        account: dict[str, object],
+        positions: list[dict[str, object]],
+        orders: list[dict[str, object]],
+        status: str = "completed",
+        error_message: str = "",
+        runner_id: str = "",
+        cycle_id: str = "",
+    ) -> str:
+        """保存一轮券商只读同步结果。"""
+        connection = connect_database(self.db_path)
+        sync_id = str(uuid4())
+        try:
+            connection.execute(
+                """
+                INSERT INTO broker_syncs (
+                    sync_id, provider, synced_at, status, account_id, currency, equity, cash, buying_power,
+                    position_count, order_count, error_message, runner_id, cycle_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sync_id,
+                    provider[:80],
+                    synced_at[:40],
+                    status[:40],
+                    str(account.get("account_id", ""))[:120],
+                    str(account.get("currency", ""))[:20],
+                    float(account.get("equity", 0.0) or 0.0),
+                    float(account.get("cash", 0.0) or 0.0),
+                    float(account.get("buying_power", 0.0) or 0.0),
+                    len(positions),
+                    len(orders),
+                    error_message[:500],
+                    runner_id[:120],
+                    cycle_id[:80],
+                ),
+            )
+            if positions:
+                connection.executemany(
+                    """
+                    INSERT INTO broker_position_snapshots (
+                        sync_id, symbol, quantity, market_price, average_cost, market_value, unrealized_pnl, source_updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            sync_id,
+                            str(item.get("symbol", ""))[:32],
+                            float(item.get("quantity", 0.0) or 0.0),
+                            float(item.get("market_price", 0.0) or 0.0),
+                            float(item.get("average_cost", 0.0) or 0.0),
+                            float(item.get("market_value", 0.0) or 0.0),
+                            float(item.get("unrealized_pnl", 0.0) or 0.0),
+                            str(item.get("source_updated_at", ""))[:40],
+                        )
+                        for item in positions
+                    ],
+                )
+            if orders:
+                connection.executemany(
+                    """
+                    INSERT INTO broker_order_snapshots (
+                        sync_id, broker_order_id, symbol, side, status, quantity, filled_quantity,
+                        limit_price, stop_price, submitted_at, source_updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            sync_id,
+                            str(item.get("broker_order_id", ""))[:120],
+                            str(item.get("symbol", ""))[:32],
+                            str(item.get("side", ""))[:20],
+                            str(item.get("status", ""))[:40],
+                            float(item.get("quantity", 0.0) or 0.0),
+                            float(item.get("filled_quantity", 0.0) or 0.0),
+                            float(item.get("limit_price", 0.0) or 0.0),
+                            float(item.get("stop_price", 0.0) or 0.0),
+                            str(item.get("submitted_at", ""))[:40],
+                            str(item.get("source_updated_at", ""))[:40],
+                        )
+                        for item in orders
+                    ],
+                )
+            return sync_id
+        finally:
+            connection.close()
+
+    def fetch_recent_broker_syncs(self, limit: int = 20) -> list[dict[str, object]]:
+        """查询最近的券商同步摘要。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "broker_syncs" for table in tables):
+                return []
+            rows = connection.execute(
+                """
+                SELECT sync_id, provider, synced_at, status, account_id, currency, equity, cash, buying_power,
+                       position_count, order_count, error_message, runner_id, cycle_id
+                FROM broker_syncs
+                ORDER BY synced_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            {
+                "sync_id": row[0],
+                "provider": row[1],
+                "synced_at": row[2],
+                "status": row[3],
+                "account_id": row[4],
+                "currency": row[5],
+                "equity": row[6],
+                "cash": row[7],
+                "buying_power": row[8],
+                "position_count": row[9],
+                "order_count": row[10],
+                "error_message": row[11],
+                "runner_id": row[12],
+                "cycle_id": row[13],
+            }
+            for row in rows
+        ]
+
+    def fetch_broker_sync_detail(self, sync_id: str) -> dict[str, object] | None:
+        """查询单次券商同步的完整明细。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            table_names = {table[0] for table in tables}
+            if "broker_syncs" not in table_names:
+                return None
+            sync_row = connection.execute(
+                """
+                SELECT sync_id, provider, synced_at, status, account_id, currency, equity, cash, buying_power,
+                       position_count, order_count, error_message, runner_id, cycle_id
+                FROM broker_syncs
+                WHERE sync_id = ?
+                """,
+                (sync_id,),
+            ).fetchone()
+            if sync_row is None:
+                return None
+            position_rows = []
+            order_rows = []
+            if "broker_position_snapshots" in table_names:
+                position_rows = connection.execute(
+                    """
+                    SELECT symbol, quantity, market_price, average_cost, market_value, unrealized_pnl, source_updated_at
+                    FROM broker_position_snapshots
+                    WHERE sync_id = ?
+                    ORDER BY symbol
+                    """,
+                    (sync_id,),
+                ).fetchall()
+            if "broker_order_snapshots" in table_names:
+                order_rows = connection.execute(
+                    """
+                    SELECT broker_order_id, symbol, side, status, quantity, filled_quantity, limit_price,
+                           stop_price, submitted_at, source_updated_at
+                    FROM broker_order_snapshots
+                    WHERE sync_id = ?
+                    ORDER BY submitted_at DESC, broker_order_id
+                    """,
+                    (sync_id,),
+                ).fetchall()
+        finally:
+            connection.close()
+        return {
+            "sync": {
+                "sync_id": sync_row[0],
+                "provider": sync_row[1],
+                "synced_at": sync_row[2],
+                "status": sync_row[3],
+                "account_id": sync_row[4],
+                "currency": sync_row[5],
+                "equity": sync_row[6],
+                "cash": sync_row[7],
+                "buying_power": sync_row[8],
+                "position_count": sync_row[9],
+                "order_count": sync_row[10],
+                "error_message": sync_row[11],
+                "runner_id": sync_row[12],
+                "cycle_id": sync_row[13],
+            },
+            "positions": [
+                {
+                    "symbol": row[0],
+                    "quantity": row[1],
+                    "market_price": row[2],
+                    "average_cost": row[3],
+                    "market_value": row[4],
+                    "unrealized_pnl": row[5],
+                    "source_updated_at": row[6],
+                }
+                for row in position_rows
+            ],
+            "orders": [
+                {
+                    "broker_order_id": row[0],
+                    "symbol": row[1],
+                    "side": row[2],
+                    "status": row[3],
+                    "quantity": row[4],
+                    "filled_quantity": row[5],
+                    "limit_price": row[6],
+                    "stop_price": row[7],
+                    "submitted_at": row[8],
+                    "source_updated_at": row[9],
+                }
+                for row in order_rows
+            ],
+        }
+
     def fetch_recent_executions(self, limit: int = 10) -> list[dict[str, object]]:
         """查询最近几次执行尝试，包括失败与中断。"""
         connection = connect_database(self.db_path)
@@ -2173,7 +2393,7 @@ class BacktestRunRepository:
         ]
 
     def fetch_history_bundle(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, list[dict[str, object]]]:
-        """一次性取回历史页面需要的 runs / executions / live cycles / orders / audit / notifications 六组数据。
+        """一次性取回历史页面需要的 runs / executions / live cycles / broker syncs / orders / audit / notifications 七组数据。
 
         之所以把 execution 单独带出来，是因为“运行有没有成功”与“订单后来发生了什么”
         属于两个不同层级的问题。历史页需要同时看到这两层，排错才完整。
@@ -2185,6 +2405,7 @@ class BacktestRunRepository:
             runs: list[dict[str, object]] = []
             executions: list[dict[str, object]] = []
             live_cycles: list[dict[str, object]] = []
+            broker_syncs: list[dict[str, object]] = []
             orders: list[dict[str, object]] = []
             audit_events: list[dict[str, object]] = []
             notification_events: list[dict[str, object]] = []
@@ -2243,6 +2464,37 @@ class BacktestRunRepository:
                     (events_limit,),
                 ).fetchall()
                 live_cycles = [self._live_cycle_row_to_dict(row) for row in live_cycle_rows]
+
+            if "broker_syncs" in table_names:
+                broker_sync_rows = connection.execute(
+                    """
+                    SELECT sync_id, provider, synced_at, status, account_id, currency, equity, cash, buying_power,
+                           position_count, order_count, error_message, runner_id, cycle_id
+                    FROM broker_syncs
+                    ORDER BY synced_at DESC
+                    LIMIT ?
+                    """,
+                    (events_limit,),
+                ).fetchall()
+                broker_syncs = [
+                    {
+                        "sync_id": row[0],
+                        "provider": row[1],
+                        "synced_at": row[2],
+                        "status": row[3],
+                        "account_id": row[4],
+                        "currency": row[5],
+                        "equity": row[6],
+                        "cash": row[7],
+                        "buying_power": row[8],
+                        "position_count": row[9],
+                        "order_count": row[10],
+                        "error_message": row[11],
+                        "runner_id": row[12],
+                        "cycle_id": row[13],
+                    }
+                    for row in broker_sync_rows
+                ]
 
             if "order_events" in table_names:
                 order_rows = connection.execute(
@@ -2360,6 +2612,7 @@ class BacktestRunRepository:
             "runs": runs,
             "executions": executions,
             "live_cycles": live_cycles,
+            "broker_syncs": broker_syncs,
             "orders": orders,
             "audit_events": audit_events,
             "notification_events": notification_events,

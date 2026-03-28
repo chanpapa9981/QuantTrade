@@ -10,6 +10,7 @@ from pathlib import Path
 
 from quanttrade.config.models import (
     AppConfig,
+    BrokerConfig,
     DataConfig,
     ExecutionConfig,
     LiveConfig,
@@ -107,5 +108,6 @@ def load_settings(path: str | Path) -> Settings:
         data=DataConfig(**_section(payload, "data")),
         execution=ExecutionConfig(**_section(payload, "execution")),
         live=LiveConfig(**_section(payload, "live")),
+        broker=BrokerConfig(**_section(payload, "broker")),
         notification=NotificationConfig(**_section(payload, "notification")),
     )

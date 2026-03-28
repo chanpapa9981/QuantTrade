@@ -169,6 +169,48 @@ def create_schema(db_path: str) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_live_runner_cycles_runner_market_started
             ON live_runner_cycles(runner_id, symbol, timeframe, started_at);
+
+            CREATE TABLE IF NOT EXISTS broker_syncs (
+                sync_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                synced_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
+                currency TEXT NOT NULL DEFAULT '',
+                equity REAL NOT NULL DEFAULT 0,
+                cash REAL NOT NULL DEFAULT 0,
+                buying_power REAL NOT NULL DEFAULT 0,
+                position_count INTEGER NOT NULL DEFAULT 0,
+                order_count INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT NOT NULL DEFAULT '',
+                runner_id TEXT NOT NULL DEFAULT '',
+                cycle_id TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS broker_position_snapshots (
+                sync_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                market_price REAL NOT NULL,
+                average_cost REAL NOT NULL DEFAULT 0,
+                market_value REAL NOT NULL DEFAULT 0,
+                unrealized_pnl REAL NOT NULL DEFAULT 0,
+                source_updated_at TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS broker_order_snapshots (
+                sync_id TEXT NOT NULL,
+                broker_order_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                status TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                filled_quantity REAL NOT NULL DEFAULT 0,
+                limit_price REAL NOT NULL DEFAULT 0,
+                stop_price REAL NOT NULL DEFAULT 0,
+                submitted_at TEXT NOT NULL DEFAULT '',
+                source_updated_at TEXT NOT NULL DEFAULT ''
+            );
             """
         )
         # 历史版本数据库可能没有这些字段，所以这里用增量迁移方式自动补齐。
@@ -224,5 +266,15 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS error_message TEXT DEFAULT '';")
         connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS protection_mode INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS cycle_note TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS account_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS equity REAL DEFAULT 0;")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS cash REAL DEFAULT 0;")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS buying_power REAL DEFAULT 0;")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS position_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS order_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS error_message TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS runner_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS cycle_id TEXT DEFAULT '';")
     finally:
         connection.close()

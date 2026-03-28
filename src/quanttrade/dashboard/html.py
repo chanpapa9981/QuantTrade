@@ -1035,6 +1035,32 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
             </table>
           </div>
         </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Recent Broker Syncs</h2>
+          <div class="panel-note">Read-only broker snapshots normalized into the local controller history</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Sync ID</th>
+                  <th>Provider</th>
+                  <th>Synced At</th>
+                  <th>Status</th>
+                  <th>Account</th>
+                  <th>Broker Equity</th>
+                  <th>Cash</th>
+                  <th>Positions</th>
+                  <th>Orders</th>
+                  <th>Runner</th>
+                  <th>Cycle</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody id="broker-sync-table"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
 
       <div class="stack">
@@ -1515,6 +1541,13 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Live Failed", value: summary.failed_live_cycles }},
         {{ label: "Live Runners", value: summary.live_runners }},
         {{ label: "Idle Runners", value: summary.idle_live_runners }},
+        {{ label: "Broker Syncs", value: summary.total_broker_syncs }},
+        {{ label: "Broker Sync Failed", value: summary.failed_broker_syncs }},
+        {{ label: "Broker Provider", value: summary.latest_broker_provider || "-" }},
+        {{ label: "Broker Equity", value: summary.latest_broker_equity }},
+        {{ label: "Broker Cash", value: summary.latest_broker_cash }},
+        {{ label: "Broker Positions", value: summary.latest_broker_positions }},
+        {{ label: "Broker Orders", value: summary.latest_broker_orders }},
         {{ label: "Notifications", value: summary.total_notifications }},
         {{ label: "Critical Alerts", value: summary.critical_notifications }},
         {{ label: "Queued Alerts", value: summary.queued_notifications }},
@@ -1765,6 +1798,39 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{row.latest_bar_at || ""}}</td>
         </tr>
       `).join("") : '<tr><td colspan="12" class="muted">No live runner summary rows in the current view.</td></tr>';
+
+      // broker sync 先走只读快照，但也需要和 runner / request / execution 放在同一页排查。
+      const brokerRows = (payload.recent_broker_syncs || []).filter(sync => {{
+        if (state.executionId && sync.cycle_id) {{
+          const matchedCycle = rows.find(cycle => cycle.cycle_id === sync.cycle_id);
+          if (matchedCycle && matchedCycle.execution_id && matchedCycle.execution_id !== state.executionId) {{
+            return false;
+          }}
+        }}
+        if (state.requestId && sync.cycle_id) {{
+          const matchedCycle = rows.find(cycle => cycle.cycle_id === sync.cycle_id);
+          if (matchedCycle && matchedCycle.request_id && matchedCycle.request_id !== state.requestId) {{
+            return false;
+          }}
+        }}
+        return true;
+      }});
+      document.getElementById("broker-sync-table").innerHTML = brokerRows.length ? brokerRows.map(sync => `
+        <tr class="${{sync.status === "failed" ? "row-anomaly" : ""}}">
+          <td>${{sync.sync_id}}</td>
+          <td>${{sync.provider}}</td>
+          <td>${{sync.synced_at || ""}}</td>
+          <td>${{sync.status}}</td>
+          <td>${{sync.account_id || ""}}</td>
+          <td>${{fmt(sync.equity)}}</td>
+          <td>${{fmt(sync.cash)}}</td>
+          <td>${{fmt(sync.position_count)}}</td>
+          <td>${{fmt(sync.order_count)}}</td>
+          <td>${{sync.runner_id || ""}}</td>
+          <td>${{sync.cycle_id || ""}}</td>
+          <td>${{sync.error_message || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="12" class="muted">No broker sync rows in the current view.</td></tr>';
     }}
     function renderExecutionDetail() {{
       // 详情面板把一次执行尝试的“控制器级状态”摊开，便于判断是否要继续追订单层。

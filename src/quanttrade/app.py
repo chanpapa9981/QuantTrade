@@ -20,6 +20,7 @@ from uuid import uuid4
 from quanttrade.audit.logger import configure_logging
 from quanttrade.backtest.engine import BacktestEngine
 from quanttrade.backtest.exporter import export_backtest_result
+from quanttrade.broker.service import fetch_broker_snapshot
 from quanttrade.config.loader import load_settings
 from quanttrade.core.exceptions import NonRetryableExecutionError, RetryableExecutionError
 from quanttrade.core.types import AccountState, MarketBar, PositionState
@@ -83,6 +84,7 @@ class QuantTradeApp:
             "data_backend": self.settings.data.backend,
             "execution": asdict(self.settings.execution),
             "live": asdict(self.settings.live),
+            "broker": asdict(self.settings.broker),
             "notification": asdict(self.settings.notification),
         }
 
@@ -768,6 +770,13 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"live_cycles": repository.fetch_recent_live_cycles(limit=limit)}
 
+    def recent_broker_syncs(self, limit: int = 20) -> dict[str, object]:
+        """查询最近的券商只读同步记录。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"broker_syncs": repository.fetch_recent_broker_syncs(limit=limit)}
+
     def live_runner_status(self, limit: int = 20) -> dict[str, object]:
         """查看 live runner 汇总状态。"""
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
@@ -779,6 +788,69 @@ class QuantTradeApp:
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"cycle": repository.fetch_live_cycle_detail(cycle_id=cycle_id)}
+
+    def broker_sync_detail(self, sync_id: str) -> dict[str, object]:
+        """查看单次券商同步的完整详情。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"detail": repository.fetch_broker_sync_detail(sync_id=sync_id)}
+
+    def broker_sync(self, *, runner_id: str = "", cycle_id: str = "") -> dict[str, object]:
+        """执行一次券商只读同步。
+
+        这一步现在先走本地文件 provider，但上层接口已经定成“同步一次外部快照”：
+        后面接真实 Schwab 时，调用方式可以保持不变。
+        """
+        if not bool(self.settings.broker.enabled):
+            return {
+                "status": "disabled",
+                "message": "broker sync is disabled in config",
+            }
+
+        effective_runner_id = self._effective_live_runner_id(runner_id)
+        try:
+            snapshot = fetch_broker_snapshot(self.settings.broker)
+        except Exception as exc:
+            synced_at = datetime.now(timezone.utc).isoformat()
+            with database_lock(self.settings.data.duckdb_path):
+                create_schema(self.settings.data.duckdb_path)
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                sync_id = repository.save_broker_sync(
+                    provider=self.settings.broker.provider,
+                    synced_at=synced_at,
+                    account={},
+                    positions=[],
+                    orders=[],
+                    status="failed",
+                    error_message=str(exc),
+                    runner_id=effective_runner_id,
+                    cycle_id=cycle_id,
+                )
+                detail = repository.fetch_broker_sync_detail(sync_id=sync_id)
+            self._record_notification(
+                severity="error",
+                category="broker_sync_failed",
+                title="Broker sync failed",
+                message=str(exc),
+            )
+            return {"status": "failed", "detail": detail}
+
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            sync_id = repository.save_broker_sync(
+                provider=str(snapshot.get("provider", self.settings.broker.provider)),
+                synced_at=str(snapshot.get("synced_at", "")),
+                account=dict(snapshot.get("account", {})),
+                positions=list(snapshot.get("positions", [])),
+                orders=list(snapshot.get("orders", [])),
+                status="completed",
+                runner_id=effective_runner_id,
+                cycle_id=cycle_id,
+            )
+            detail = repository.fetch_broker_sync_detail(sync_id=sync_id)
+        return {"status": "completed", "detail": detail}
 
     def live_run_cycle(
         self,
@@ -847,6 +919,10 @@ class QuantTradeApp:
                 detail = repository.fetch_live_cycle_detail(cycle_id=cycle_id)
             return {"status": "skipped", "cycle": detail, "runner_id": effective_runner_id}
 
+        broker_sync_result: dict[str, object] | None = None
+        if bool(self.settings.broker.enabled):
+            broker_sync_result = self.broker_sync(runner_id=effective_runner_id, cycle_id=cycle_id)
+
         try:
             persisted = self.persist_backtest_run(
                 symbol=symbol,
@@ -900,6 +976,7 @@ class QuantTradeApp:
             "status": cycle_status,
             "runner_id": effective_runner_id,
             "cycle": detail,
+            "broker_sync": broker_sync_result,
             "persisted_run": persisted,
         }
 
@@ -1251,6 +1328,7 @@ class QuantTradeApp:
                 bundle["runs"],
                 bundle["executions"],
                 bundle["live_cycles"],
+                bundle["broker_syncs"],
                 bundle["orders"],
                 bundle["audit_events"],
                 bundle["notification_events"],

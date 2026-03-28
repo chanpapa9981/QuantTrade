@@ -923,6 +923,18 @@
 | 未完成 | runner heartbeat、失联 runner 告警、runner 级自动恢复、市场时段感知、接券商后的 live broker health |
 | 备注 | 这一轮把 live skeleton 从“有周期明细”推进成了“有 runner 级健康视图”的更完整运行骨架 |
 
+### 2026-03-28 第 55 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 给系统补上第一版券商只读同步骨架，让外部账户、持仓、订单快照能先进入本地控制台，而不是等真实下单前再临时补接口 |
+| 输入 | 已有 live runner / request / execution / notification 链路，但系统还完全看不到“券商侧当前账户是什么样、持仓多少、挂单多少”，后续要做对账和实盘同步时会缺一整层基础视图 |
+| 产出 | `broker` 配置；标准化 `BrokerAccountSnapshot` / `BrokerPositionSnapshot` / `BrokerOrderSnapshot`；本地 JSON provider；`broker_syncs` / `broker_position_snapshots` / `broker_order_snapshots` 表；`broker-sync` / `broker-syncs` / `broker-sync-detail` CLI；history payload / history HTML 的 broker 摘要和 `Recent Broker Syncs` 面板；对应测试 |
+| 结果 | 现在系统已经可以把一份外部 broker 快照以统一格式读入、落库、查询并展示在历史页里；虽然当前 provider 还是本地文件，但上层接口已经定成“同步一次外部券商快照” |
+| 为什么这么做 | 因为接真实券商最难的部分之一，不是先把 HTTP 请求打通，而是先定义清楚“账户、持仓、订单快照在系统内部长什么样”。先用本地文件把同步骨架跑通，可以提前把 repository、CLI、history、测试都稳定下来，等真正接 Schwab 时只需要替换 provider 层，而不用重做整条上层链路。 |
+| 未完成 | 真实 Schwab OAuth / API client、broker sync 与 live cycle 更深联动、本地订单与券商订单对账、回报驱动的状态同步 |
+| 备注 | 这一轮把系统从“只有本地执行视角”推进成了“开始具备外部券商快照视角”的实盘前置骨架 |
+
 ---
 
 ## 10. 完整项目搭建观察框架

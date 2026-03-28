@@ -51,6 +51,13 @@ live:
   poll_interval_seconds: 60.0
   max_cycles_per_run: 1
 
+broker:
+  enabled: false
+  provider: local_file
+  account_snapshot_path: var/broker/account.json
+  positions_snapshot_path: var/broker/positions.json
+  orders_snapshot_path: var/broker/orders.json
+
 notification:
   provider: telegram
   enabled: false

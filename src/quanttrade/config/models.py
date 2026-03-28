@@ -110,6 +110,17 @@ class LiveConfig:
 
 
 @dataclass(slots=True)
+class BrokerConfig:
+    """券商只读同步配置。"""
+
+    enabled: bool = False
+    provider: str = "local_file"
+    account_snapshot_path: str = "var/broker/account.json"
+    positions_snapshot_path: str = "var/broker/positions.json"
+    orders_snapshot_path: str = "var/broker/orders.json"
+
+
+@dataclass(slots=True)
 class Settings:
     """项目完整配置集合。"""
 
@@ -119,4 +130,5 @@ class Settings:
     data: DataConfig = field(default_factory=DataConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
+    broker: BrokerConfig = field(default_factory=BrokerConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)

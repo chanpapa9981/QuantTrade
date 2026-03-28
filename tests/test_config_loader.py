@@ -29,6 +29,8 @@ class ConfigLoaderTestCase(unittest.TestCase):
         self.assertEqual(settings.app.app_name, "TestApp")
         self.assertEqual(settings.strategy.symbol, "MSFT")
         self.assertEqual(settings.risk.max_open_positions, 5)
+        self.assertEqual(settings.broker.provider, "local_file")
+        self.assertFalse(settings.broker.enabled)
 
 
 if __name__ == "__main__":
