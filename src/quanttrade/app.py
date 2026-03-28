@@ -188,6 +188,13 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"executions": repository.fetch_recent_executions(limit=limit)}
 
+    def execution_detail(self, execution_id: str) -> dict[str, object]:
+        """查询某次执行尝试的完整详情。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"detail": repository.fetch_execution_detail(execution_id=execution_id)}
+
     def backtest_run_detail(self, run_id: str) -> dict[str, object]:
         """查询某次回测的完整明细。"""
         with database_lock(self.settings.data.duckdb_path):
@@ -223,7 +230,12 @@ class QuantTradeApp:
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             bundle = repository.fetch_history_bundle(runs_limit=runs_limit, events_limit=events_limit)
-            return build_history_payload(bundle["runs"], bundle["orders"], bundle["audit_events"])
+            return build_history_payload(
+                bundle["runs"],
+                bundle["executions"],
+                bundle["orders"],
+                bundle["audit_events"],
+            )
 
     def export_backtest(
         self,
@@ -298,6 +310,7 @@ class QuantTradeApp:
         return {
             "output_path": written_path,
             "runs": len(payload["runs_table"]),
+            "executions": len(payload["recent_executions"]),
             "orders": len(payload["recent_orders"]),
             "audit_events": len(payload["recent_audit_events"]),
         }

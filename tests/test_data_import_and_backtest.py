@@ -90,6 +90,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         )
         recent_runs = app.recent_backtest_runs(limit=5)
         recent_executions = app.recent_backtest_executions(limit=5)
+        execution_detail = app.execution_detail(execution_id=persist_result["execution_id"])
         run_detail = app.backtest_run_detail(run_id=persist_result["run_id"])
         recent_orders = app.recent_order_events(limit=5)
         order_detail = app.order_detail(order_id=run_detail["detail"]["orders"][0]["order_id"])
@@ -129,6 +130,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(recent_runs["runs"]), 1)
         self.assertGreaterEqual(len(recent_executions["executions"]), 1)
         self.assertEqual(recent_executions["executions"][0]["status"], "completed")
+        self.assertIsNotNone(execution_detail["detail"])
+        self.assertEqual(execution_detail["detail"]["execution"]["execution_id"], persist_result["execution_id"])
+        self.assertEqual(execution_detail["detail"]["execution"]["attempt_number"], 1)
+        self.assertFalse(execution_detail["detail"]["execution"]["protection_mode"])
+        self.assertEqual(execution_detail["detail"]["run"]["run_id"], persist_result["run_id"])
         self.assertIsNotNone(run_detail["detail"])
         self.assertIn("account_snapshot", run_detail["detail"])
         self.assertIn("order_lifecycles", run_detail["detail"])
@@ -143,6 +149,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("broker_status", recent_orders["orders"][0])
         self.assertGreaterEqual(len(recent_audit["audit_events"]), 1)
         self.assertIn("history_summary", history_payload)
+        self.assertIn("recent_executions", history_payload)
+        self.assertGreaterEqual(len(history_payload["recent_executions"]), 1)
+        self.assertIn("total_executions", history_payload["history_summary"])
+        self.assertIn("protection_mode_executions", history_payload["history_summary"])
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""

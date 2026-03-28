@@ -422,6 +422,80 @@ class BacktestRunRepository:
             for row in rows
         ]
 
+    def fetch_execution_detail(self, execution_id: str) -> dict[str, object] | None:
+        """查询某一次执行尝试的完整详情。
+
+        这个接口主要服务两类场景：
+        1. CLI 直接查看某次执行为什么失败、是不是保护模式启动；
+        2. 后续历史页如果需要更深的 execution drill-down，也可以直接复用。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            table_names = {table[0] for table in tables}
+            if "backtest_executions" not in table_names:
+                return None
+            execution_row = connection.execute(
+                """
+                SELECT execution_id, symbol, timeframe, initial_equity, attempt_number,
+                       recovered_execution_count, consecutive_failures_before_start,
+                       protection_mode, protection_reason, status,
+                       requested_at, started_at, finished_at, run_id, error_message
+                FROM backtest_executions
+                WHERE execution_id = ?
+                """,
+                (execution_id,),
+            ).fetchone()
+            if execution_row is None:
+                return None
+            run_row = None
+            run_id = execution_row[13]
+            if run_id and "backtest_runs" in table_names:
+                run_row = connection.execute(
+                    """
+                    SELECT run_id, symbol, timeframe, started_at, bars_processed, ending_equity,
+                           total_return_pct, sharpe_ratio, total_trades
+                    FROM backtest_runs
+                    WHERE run_id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+        finally:
+            connection.close()
+
+        return {
+            "execution": {
+                "execution_id": execution_row[0],
+                "symbol": execution_row[1],
+                "timeframe": execution_row[2],
+                "initial_equity": execution_row[3],
+                "attempt_number": execution_row[4],
+                "recovered_execution_count": execution_row[5],
+                "consecutive_failures_before_start": execution_row[6],
+                "protection_mode": bool(execution_row[7]),
+                "protection_reason": execution_row[8],
+                "status": execution_row[9],
+                "requested_at": execution_row[10],
+                "started_at": execution_row[11],
+                "finished_at": execution_row[12],
+                "run_id": execution_row[13],
+                "error_message": execution_row[14],
+            },
+            "run": {
+                "run_id": run_row[0],
+                "symbol": run_row[1],
+                "timeframe": run_row[2],
+                "started_at": run_row[3],
+                "bars_processed": run_row[4],
+                "ending_equity": run_row[5],
+                "total_return_pct": run_row[6],
+                "sharpe_ratio": run_row[7],
+                "total_trades": run_row[8],
+            }
+            if run_row
+            else {"run_id": run_id} if run_id else None,
+        }
+
     def fetch_run_detail(self, run_id: str) -> dict[str, object] | None:
         """查询某次回测的完整详情。"""
         connection = connect_database(self.db_path)
@@ -684,12 +758,17 @@ class BacktestRunRepository:
         ]
 
     def fetch_history_bundle(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, list[dict[str, object]]]:
-        """一次性取回历史页面需要的 runs / orders / audit 三组数据。"""
+        """一次性取回历史页面需要的 runs / executions / orders / audit 四组数据。
+
+        之所以把 execution 单独带出来，是因为“运行有没有成功”与“订单后来发生了什么”
+        属于两个不同层级的问题。历史页需要同时看到这两层，排错才完整。
+        """
         connection = connect_database(self.db_path)
         try:
             tables = connection.execute("SHOW TABLES").fetchall()
             table_names = {table[0] for table in tables}
             runs: list[dict[str, object]] = []
+            executions: list[dict[str, object]] = []
             orders: list[dict[str, object]] = []
             audit_events: list[dict[str, object]] = []
 
@@ -719,6 +798,40 @@ class BacktestRunRepository:
                         "total_trades": row[10],
                     }
                     for row in run_rows
+                ]
+
+            if "backtest_executions" in table_names:
+                execution_rows = connection.execute(
+                    """
+                    SELECT execution_id, symbol, timeframe, initial_equity, attempt_number,
+                           recovered_execution_count, consecutive_failures_before_start,
+                           protection_mode, protection_reason, status,
+                           requested_at, started_at, finished_at, run_id, error_message
+                    FROM backtest_executions
+                    ORDER BY started_at DESC
+                    LIMIT ?
+                    """,
+                    (events_limit,),
+                ).fetchall()
+                executions = [
+                    {
+                        "execution_id": row[0],
+                        "symbol": row[1],
+                        "timeframe": row[2],
+                        "initial_equity": row[3],
+                        "attempt_number": row[4],
+                        "recovered_execution_count": row[5],
+                        "consecutive_failures_before_start": row[6],
+                        "protection_mode": bool(row[7]),
+                        "protection_reason": row[8],
+                        "status": row[9],
+                        "requested_at": row[10],
+                        "started_at": row[11],
+                        "finished_at": row[12],
+                        "run_id": row[13],
+                        "error_message": row[14],
+                    }
+                    for row in execution_rows
                 ]
 
             if "order_events" in table_names:
@@ -777,6 +890,7 @@ class BacktestRunRepository:
 
         return {
             "runs": runs,
+            "executions": executions,
             "orders": orders,
             "audit_events": audit_events,
         }

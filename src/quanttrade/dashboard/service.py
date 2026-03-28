@@ -113,6 +113,7 @@ def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, obj
 
 def build_history_payload(
     runs: list[dict[str, object]],
+    executions: list[dict[str, object]],
     orders: list[dict[str, object]],
     audit_events: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -123,6 +124,11 @@ def build_history_payload(
     return {
         "history_summary": {
             "total_runs": len(runs),
+            "total_executions": len(executions),
+            "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
+            "running_executions": len([item for item in executions if item.get("status") == "running"]),
+            "protection_mode_executions": len([item for item in executions if item.get("protection_mode")]),
+            "recovered_execution_starts": sum(int(item.get("recovered_execution_count", 0)) for item in executions),
             "latest_symbol": latest_run.get("symbol", ""),
             "latest_return_pct": latest_run.get("total_return_pct", 0.0),
             "latest_sharpe_ratio": latest_run.get("sharpe_ratio", 0.0),
@@ -133,6 +139,7 @@ def build_history_payload(
             "repriced_lifecycles": len([item for item in order_lifecycles if "replaced" in str(item.get("status_path", ""))]),
         },
         "runs_table": runs,
+        "recent_executions": executions,
         "order_lifecycles": order_lifecycles,
         "order_lifecycle_details": order_lifecycle_details,
         "recent_orders": orders,

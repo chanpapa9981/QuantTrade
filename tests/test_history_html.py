@@ -10,7 +10,7 @@ from quanttrade.app import QuantTradeApp
 
 class HistoryHtmlTestCase(unittest.TestCase):
     def test_export_history_html_writes_expected_sections(self) -> None:
-        """确认历史页包含生命周期、筛选器、分享态和异常聚焦相关区域。"""
+        """确认历史页包含执行视图、生命周期、筛选器、分享态和异常聚焦相关区域。"""
         base_dir = Path("var/test-artifacts/history-html")
         base_dir.mkdir(parents=True, exist_ok=True)
         csv_path = base_dir / "bars.csv"
@@ -66,11 +66,17 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertTrue(output_path.exists())
         html = output_path.read_text(encoding="utf-8")
         self.assertIn("Run History Dashboard", html)
+        self.assertIn("Execution Attempts", html)
+        self.assertIn("Recent Executions", html)
+        self.assertIn("Execution Detail", html)
+        self.assertIn("Protection Starts", html)
         self.assertIn("Lifecycle Filled", html)
         self.assertIn("Recent Runs", html)
         self.assertIn("Order Lifecycles", html)
         self.assertIn("Broker", html)
         self.assertIn("Lifecycle Detail", html)
+        self.assertIn("execution-table", html)
+        self.assertIn("execution-status-filter", html)
         self.assertIn("lifecycle-filter", html)
         self.assertIn("run-filter", html)
         self.assertIn("side-filter", html)

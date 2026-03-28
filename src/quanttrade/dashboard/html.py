@@ -703,6 +703,38 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
             </table>
           </div>
         </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Recent Executions</h2>
+          <div class="panel-note">Latest controller-level execution attempts, including retries and protection starts</div>
+          <div class="toolbar">
+            <label for="execution-status-filter">Execution</label>
+            <select id="execution-status-filter">
+              <option value="all">All attempts</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+              <option value="abandoned">Abandoned</option>
+              <option value="running">Running</option>
+              <option value="protection">Protection starts</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Execution ID</th>
+                  <th>Run ID</th>
+                  <th>Status</th>
+                  <th>Attempt</th>
+                  <th>Recovered</th>
+                  <th>Failures Before</th>
+                  <th>Protection</th>
+                </tr>
+              </thead>
+              <tbody id="execution-table"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
 
       <div class="stack">
@@ -794,6 +826,29 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </section>
 
         <section class="panel">
+          <h2 class="panel-title">Execution Detail</h2>
+          <div class="panel-note">Click an execution attempt to inspect retry count, protection mode and linked run context</div>
+          <div id="execution-detail-meta" class="muted"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Execution ID</th>
+                  <th>Symbol</th>
+                  <th>Status</th>
+                  <th>Attempt</th>
+                  <th>Recovered</th>
+                  <th>Failures Before</th>
+                  <th>Protection</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="execution-detail-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Recent Orders</h2>
           <div class="panel-note">Latest persisted order events</div>
           <div class="table-wrap">
@@ -874,6 +929,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const side = params.get("side") || "all";
       const broker = params.get("broker") || "all";
       const focus = params.get("focus") || "all";
+      const executionStatus = params.get("execution_status") || "all";
+      const executionId = params.get("execution") || "";
       const orderId = params.get("order") || "";
       return {{
         runId: availableRunIds().includes(runId) ? runId : "all",
@@ -881,6 +938,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         side: ["all", "BUY", "SELL"].includes(side) ? side : "all",
         broker: ["all", "pending_new", "working", "replaced", "partially_filled", "filled", "cancelled", "rejected", "local_skipped"].includes(broker) ? broker : "all",
         focus: ["all", "anomalies"].includes(focus) ? focus : "all",
+        executionStatus: ["all", "completed", "failed", "abandoned", "running", "protection"].includes(executionStatus) ? executionStatus : "all",
+        executionId,
         orderId,
       }};
     }}
@@ -893,6 +952,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       if (state.side !== "all") params.set("side", state.side);
       if (state.broker !== "all") params.set("broker", state.broker);
       if (state.focus !== "all") params.set("focus", state.focus);
+      if (state.executionStatus !== "all") params.set("execution_status", state.executionStatus);
+      if (state.executionId) params.set("execution", state.executionId);
       if (state.orderId) params.set("order", state.orderId);
       const hash = params.toString() ? `#${{params.toString()}}` : "";
       const target = `${{window.location.pathname}}${{window.location.search}}${{hash}}`;
@@ -907,6 +968,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("side-filter").value = state.side;
       document.getElementById("broker-filter").value = state.broker;
       document.getElementById("focus-filter").value = state.focus;
+      document.getElementById("execution-status-filter").value = state.executionStatus;
     }}
     function filteredLifecycleCount() {{
       return filteredLifecycles().filter(order => state.focus === "all" || isAnomaly(order)).length;
@@ -919,7 +981,9 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       bits.push(`Side: ${{state.side === "all" ? "all" : state.side}}`);
       bits.push(`Broker: ${{state.broker}}`);
       bits.push(`Focus: ${{state.focus}}`);
+      bits.push(`Execution Filter: ${{state.executionStatus}}`);
       bits.push(`Matches: ${{filteredLifecycleCount()}}`);
+      bits.push(state.executionId ? `Execution: ${{state.executionId}}` : "Execution: none selected");
       bits.push(state.orderId ? `Order: ${{state.orderId}}` : "Order: none selected");
       document.getElementById("selected-context").textContent = bits.join(" | ");
     }}
@@ -928,6 +992,10 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const summary = payload.history_summary;
       const cards = [
         {{ label: "Total Runs", value: summary.total_runs }},
+        {{ label: "Execution Attempts", value: summary.total_executions }},
+        {{ label: "Execution Failed", value: summary.failed_executions }},
+        {{ label: "Protection Starts", value: summary.protection_mode_executions }},
+        {{ label: "Recovered Starts", value: summary.recovered_execution_starts }},
         {{ label: "Latest Symbol", value: summary.latest_symbol }},
         {{ label: "Latest Return %", value: summary.latest_return_pct }},
         {{ label: "Latest Sharpe", value: summary.latest_sharpe_ratio }},
@@ -962,6 +1030,68 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           renderAll();
         }});
       }});
+    }}
+    function findExecution(executionId) {{
+      return payload.recent_executions.find(execution => execution.execution_id === executionId);
+    }}
+    function isExecutionAnomaly(execution) {{
+      if (!execution) return false;
+      return execution.status !== "completed" || execution.protection_mode || Number(execution.recovered_execution_count || 0) > 0;
+    }}
+    function renderExecutions() {{
+      // 执行表回答的是“这次回测任务本身是否健康”，它和订单表不是同一层。
+      const rows = payload.recent_executions.filter(execution => {{
+        if (state.runId !== "all" && execution.run_id !== state.runId) return false;
+        if (state.executionStatus === "protection") return Boolean(execution.protection_mode);
+        if (state.executionStatus !== "all" && execution.status !== state.executionStatus) return false;
+        return true;
+      }});
+      if (!rows.some(execution => execution.execution_id === state.executionId)) {{
+        state.executionId = rows[0]?.execution_id ?? "";
+      }}
+      document.getElementById("execution-table").innerHTML = rows.map(execution => `
+        <tr class="${{[state.executionId === execution.execution_id ? "row-active" : "", isExecutionAnomaly(execution) ? "row-anomaly" : ""].filter(Boolean).join(" ")}}">
+          <td><button class="link-button" data-execution-id="${{execution.execution_id}}">${{execution.execution_id}}</button></td>
+          <td>${{execution.run_id ? `<button class="link-button" data-execution-run-id="${{execution.run_id}}">${{execution.run_id}}</button>` : ""}}</td>
+          <td>${{execution.status}}</td>
+          <td>${{fmt(execution.attempt_number)}}</td>
+          <td>${{fmt(execution.recovered_execution_count)}}</td>
+          <td>${{fmt(execution.consecutive_failures_before_start)}}</td>
+          <td>${{execution.protection_mode ? "on" : "off"}}</td>
+        </tr>
+      `).join("");
+      document.querySelectorAll("#execution-table [data-execution-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          state.executionId = node.getAttribute("data-execution-id") || "";
+          renderAll();
+        }});
+      }});
+      document.querySelectorAll("#execution-table [data-execution-run-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          state.runId = node.getAttribute("data-execution-run-id") || "all";
+          renderAll();
+        }});
+      }});
+      renderExecutionDetail();
+    }}
+    function renderExecutionDetail() {{
+      // 详情面板把一次执行尝试的“控制器级状态”摊开，便于判断是否要继续追订单层。
+      const execution = findExecution(state.executionId);
+      document.getElementById("execution-detail-meta").textContent = execution
+        ? `Execution ${{execution.execution_id}} | Status: ${{execution.status}} | Attempt: ${{execution.attempt_number}} | Recovered Starts: ${{execution.recovered_execution_count}} | Failures Before Start: ${{execution.consecutive_failures_before_start}} | Protection: ${{execution.protection_mode ? "on" : "off"}}`
+        : "No execution selected.";
+      document.getElementById("execution-detail-table").innerHTML = execution ? `
+        <tr>
+          <td>${{execution.execution_id}}</td>
+          <td>${{execution.symbol}} / ${{execution.timeframe}}</td>
+          <td>${{execution.status}}</td>
+          <td>${{fmt(execution.attempt_number)}}</td>
+          <td>${{fmt(execution.recovered_execution_count)}}</td>
+          <td>${{fmt(execution.consecutive_failures_before_start)}}</td>
+          <td>${{execution.protection_mode ? "on" : "off"}}</td>
+          <td>${{execution.error_message || execution.protection_reason || ""}}</td>
+        </tr>
+      ` : "";
     }}
     function renderOrders() {{
       // 这里展示的是原始订单事件，适合看最近实际发生的执行动作。
@@ -1101,6 +1231,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       syncControlsToState();
       renderContext();
       renderRuns();
+      renderExecutions();
       renderLifecycles();
       renderOrders();
       renderAudit();
@@ -1129,12 +1260,18 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.focus = event.target.value || "all";
       renderAll();
     }});
+    document.getElementById("execution-status-filter").addEventListener("change", event => {{
+      state.executionStatus = event.target.value || "all";
+      renderAll();
+    }});
     document.getElementById("clear-context").addEventListener("click", () => {{
       state.runId = "all";
       state.lifecycleFilter = "all";
       state.side = "all";
       state.broker = "all";
       state.focus = "all";
+      state.executionStatus = "all";
+      state.executionId = "";
       state.orderId = "";
       renderAll();
     }});
@@ -1146,6 +1283,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.side = next.side;
       state.broker = next.broker;
       state.focus = next.focus;
+      state.executionStatus = next.executionStatus;
+      state.executionId = next.executionId;
       state.orderId = next.orderId;
       renderAll();
     }});
