@@ -713,6 +713,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <option value="all">All attempts</option>
               <option value="completed">Completed</option>
               <option value="failed">Failed</option>
+              <option value="blocked">Blocked</option>
               <option value="abandoned">Abandoned</option>
               <option value="running">Running</option>
               <option value="protection">Protection starts</option>
@@ -723,6 +724,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <thead>
                 <tr>
                   <th>Execution ID</th>
+                  <th>Request ID</th>
                   <th>Run ID</th>
                   <th>Status</th>
                   <th>Attempt</th>
@@ -834,6 +836,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <thead>
                 <tr>
                   <th>Execution ID</th>
+                  <th>Request ID</th>
                   <th>Symbol</th>
                   <th>Status</th>
                   <th>Attempt</th>
@@ -938,7 +941,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         side: ["all", "BUY", "SELL"].includes(side) ? side : "all",
         broker: ["all", "pending_new", "working", "replaced", "partially_filled", "filled", "cancelled", "rejected", "local_skipped"].includes(broker) ? broker : "all",
         focus: ["all", "anomalies"].includes(focus) ? focus : "all",
-        executionStatus: ["all", "completed", "failed", "abandoned", "running", "protection"].includes(executionStatus) ? executionStatus : "all",
+        executionStatus: ["all", "completed", "failed", "blocked", "abandoned", "running", "protection"].includes(executionStatus) ? executionStatus : "all",
         executionId,
         orderId,
       }};
@@ -994,6 +997,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Total Runs", value: summary.total_runs }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
+        {{ label: "Execution Blocked", value: summary.blocked_executions }},
         {{ label: "Protection Starts", value: summary.protection_mode_executions }},
         {{ label: "Recovered Starts", value: summary.recovered_execution_starts }},
         {{ label: "Latest Symbol", value: summary.latest_symbol }},
@@ -1052,6 +1056,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("execution-table").innerHTML = rows.map(execution => `
         <tr class="${{[state.executionId === execution.execution_id ? "row-active" : "", isExecutionAnomaly(execution) ? "row-anomaly" : ""].filter(Boolean).join(" ")}}">
           <td><button class="link-button" data-execution-id="${{execution.execution_id}}">${{execution.execution_id}}</button></td>
+          <td>${{execution.request_id || ""}}</td>
           <td>${{execution.run_id ? `<button class="link-button" data-execution-run-id="${{execution.run_id}}">${{execution.run_id}}</button>` : ""}}</td>
           <td>${{execution.status}}</td>
           <td>${{fmt(execution.attempt_number)}}</td>
@@ -1078,11 +1083,12 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       // 详情面板把一次执行尝试的“控制器级状态”摊开，便于判断是否要继续追订单层。
       const execution = findExecution(state.executionId);
       document.getElementById("execution-detail-meta").textContent = execution
-        ? `Execution ${{execution.execution_id}} | Status: ${{execution.status}} | Attempt: ${{execution.attempt_number}} | Recovered Starts: ${{execution.recovered_execution_count}} | Failures Before Start: ${{execution.consecutive_failures_before_start}} | Protection: ${{execution.protection_mode ? "on" : "off"}}`
+        ? `Execution ${{execution.execution_id}} | Request: ${{execution.request_id || ""}} | Status: ${{execution.status}} | Attempt: ${{execution.attempt_number}} | Recovered Starts: ${{execution.recovered_execution_count}} | Failures Before Start: ${{execution.consecutive_failures_before_start}} | Protection: ${{execution.protection_mode ? "on" : "off"}}`
         : "No execution selected.";
       document.getElementById("execution-detail-table").innerHTML = execution ? `
         <tr>
           <td>${{execution.execution_id}}</td>
+          <td>${{execution.request_id || ""}}</td>
           <td>${{execution.symbol}} / ${{execution.timeframe}}</td>
           <td>${{execution.status}}</td>
           <td>${{fmt(execution.attempt_number)}}</td>

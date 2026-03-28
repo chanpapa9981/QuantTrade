@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from quanttrade.audit.logger import configure_logging
 from quanttrade.backtest.engine import BacktestEngine
@@ -129,41 +130,88 @@ class QuantTradeApp:
         1. execution_lock：阻止同标的同周期被重复触发；
         2. backtest_executions：记录这次运行是开始了、完成了、失败了还是中断恢复了。
         """
+        max_retry_attempts = max(int(self.settings.execution.max_retry_attempts), 1)
+        protection_threshold = max(int(self.settings.execution.protection_mode_failure_threshold), 1)
+        skip_run_on_protection_mode = bool(self.settings.execution.skip_run_on_protection_mode)
+        request_id = str(uuid4())
         execution_id = ""
         recovered_executions = 0
+        run_id = ""
+        payload: dict[str, object] = {}
+        last_error: str | None = None
+        attempts_used = 0
         with execution_lock(self.settings.data.duckdb_path, symbol=symbol, timeframe=timeframe, blocking=False):
-            with database_lock(self.settings.data.duckdb_path):
-                create_schema(self.settings.data.duckdb_path)
-                repository = BacktestRunRepository(self.settings.data.duckdb_path)
-                # 如果上一次运行异常中断，先把旧的 running 状态修正为 abandoned。
-                recovered_executions = repository.recover_stale_executions(symbol=symbol, timeframe=timeframe)
-                execution_id = repository.create_execution(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    initial_equity=initial_equity,
-                    recovered_execution_count=recovered_executions,
-                )
-                bar_repository = BarRepository(self.settings.data.duckdb_path)
-                bars = bar_repository.fetch_bars(symbol=symbol, timeframe=timeframe)
+            for _ in range(max_retry_attempts):
+                attempts_used += 1
+                with database_lock(self.settings.data.duckdb_path):
+                    create_schema(self.settings.data.duckdb_path)
+                    repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                    # 如果上一次运行异常中断，先把旧的 running 状态修正为 abandoned。
+                    recovered_executions += repository.recover_stale_executions(symbol=symbol, timeframe=timeframe)
+                    execution_id = repository.create_execution(
+                        request_id=request_id,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        initial_equity=initial_equity,
+                        recovered_execution_count=recovered_executions,
+                        protection_mode_failure_threshold=protection_threshold,
+                    )
+                    execution_detail = repository.fetch_execution_detail(execution_id)
 
-            strategy_config = self.settings.strategy
-            strategy_config.symbol = symbol
-            strategy = AtrDynamicTrendFollowingStrategy(strategy_config)
-            risk_engine = RiskEngine(self.settings.risk)
-            execution_engine = SimulatedExecutionEngine(self.settings.execution)
-            engine = BacktestEngine(strategy, risk_engine, execution_engine)
-            try:
-                payload = asdict(engine.run_series(bars=bars, initial_equity=initial_equity))
+                execution = execution_detail["execution"] if execution_detail else {}
+                if execution.get("protection_mode") and skip_run_on_protection_mode:
+                    with database_lock(self.settings.data.duckdb_path):
+                        repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                        repository.mark_execution_blocked(
+                            execution_id=execution_id,
+                            reason=str(execution.get("protection_reason") or "blocked by protection mode"),
+                        )
+                    latest_execution = self.execution_detail(execution_id=execution_id)["detail"]
+                    return {
+                        "status": "blocked",
+                        "message": "backtest execution was blocked by protection mode",
+                        "request_id": request_id,
+                        "execution_id": execution_id,
+                        "run_id": None,
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "bars_processed": 0,
+                        "metrics": {},
+                        "recovered_executions": recovered_executions,
+                        "attempts_used": attempts_used,
+                        "retry_count": max(attempts_used - 1, 0),
+                        "execution": latest_execution["execution"] if latest_execution else execution,
+                    }
+
                 with database_lock(self.settings.data.duckdb_path):
-                    repository = BacktestRunRepository(self.settings.data.duckdb_path)
-                    run_id = repository.save_run(symbol=symbol, timeframe=timeframe, payload=payload)
-                    repository.mark_execution_completed(execution_id=execution_id, run_id=run_id)
-            except Exception as exc:
-                with database_lock(self.settings.data.duckdb_path):
-                    repository = BacktestRunRepository(self.settings.data.duckdb_path)
-                    repository.mark_execution_failed(execution_id=execution_id, error_message=str(exc))
-                raise
+                    bar_repository = BarRepository(self.settings.data.duckdb_path)
+                    bars = bar_repository.fetch_bars(symbol=symbol, timeframe=timeframe)
+
+                strategy_config = self.settings.strategy
+                strategy_config.symbol = symbol
+                strategy = AtrDynamicTrendFollowingStrategy(strategy_config)
+                risk_engine = RiskEngine(self.settings.risk)
+                execution_engine = SimulatedExecutionEngine(self.settings.execution)
+                engine = BacktestEngine(strategy, risk_engine, execution_engine)
+                try:
+                    payload = asdict(engine.run_series(bars=bars, initial_equity=initial_equity))
+                    with database_lock(self.settings.data.duckdb_path):
+                        repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                        run_id = repository.save_run(symbol=symbol, timeframe=timeframe, payload=payload)
+                        repository.mark_execution_completed(execution_id=execution_id, run_id=run_id)
+                    break
+                except Exception as exc:
+                    last_error = str(exc)
+                    with database_lock(self.settings.data.duckdb_path):
+                        repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                        repository.mark_execution_failed(execution_id=execution_id, error_message=last_error)
+                    if attempts_used >= max_retry_attempts:
+                        raise
+            else:
+                raise RuntimeError(last_error or "backtest execution failed without explicit error")
         return {
+            "status": "completed",
+            "request_id": request_id,
             "execution_id": execution_id,
             "run_id": run_id,
             "symbol": symbol,
@@ -171,34 +219,32 @@ class QuantTradeApp:
             "bars_processed": payload["bars_processed"],
             "metrics": payload["metrics"],
             "recovered_executions": recovered_executions,
+            "attempts_used": attempts_used,
+            "retry_count": max(attempts_used - 1, 0),
             "execution": self.recent_backtest_executions(limit=1)["executions"][0],
         }
 
     def recent_backtest_runs(self, limit: int = 10) -> dict[str, object]:
         """查询最近几次已持久化的回测结果。"""
         with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"runs": repository.fetch_recent_runs(limit=limit)}
 
     def recent_backtest_executions(self, limit: int = 10) -> dict[str, object]:
         """查询最近几次“尝试执行回测”的记录，包括失败和中断。"""
         with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"executions": repository.fetch_recent_executions(limit=limit)}
 
     def execution_detail(self, execution_id: str) -> dict[str, object]:
         """查询某次执行尝试的完整详情。"""
         with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"detail": repository.fetch_execution_detail(execution_id=execution_id)}
 
     def backtest_run_detail(self, run_id: str) -> dict[str, object]:
         """查询某次回测的完整明细。"""
         with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             detail = repository.fetch_run_detail(run_id)
             return {"detail": detail}
@@ -206,28 +252,24 @@ class QuantTradeApp:
     def recent_order_events(self, limit: int = 20) -> dict[str, object]:
         """查询最近的订单事件，用于快速排查最近发生了什么。"""
         with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"orders": repository.fetch_recent_order_events(limit=limit)}
 
     def order_detail(self, order_id: str) -> dict[str, object]:
         """查询某一笔订单从创建到结束的完整生命周期。"""
         with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"detail": repository.fetch_order_detail(order_id=order_id)}
 
     def recent_audit_events(self, limit: int = 20) -> dict[str, object]:
         """查询最近的审计日志，便于查看策略和风控为何这么决定。"""
         with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"audit_events": repository.fetch_recent_audit_events(limit=limit)}
 
     def dashboard_history(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, object]:
         """把历史数据整理成前端更容易消费的结构。"""
         with database_lock(self.settings.data.duckdb_path):
-            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             bundle = repository.fetch_history_bundle(runs_limit=runs_limit, events_limit=events_limit)
             return build_history_payload(

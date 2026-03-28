@@ -126,6 +126,7 @@ def build_history_payload(
             "total_runs": len(runs),
             "total_executions": len(executions),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
+            "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),
             "running_executions": len([item for item in executions if item.get("status") == "running"]),
             "protection_mode_executions": len([item for item in executions if item.get("protection_mode")]),
             "recovered_execution_starts": sum(int(item.get("recovered_execution_count", 0)) for item in executions),

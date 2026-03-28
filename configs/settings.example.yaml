@@ -32,6 +32,9 @@ execution:
   simulated_slippage_bps: 5.0
   max_fill_ratio_per_bar: 0.05
   open_order_timeout_bars: 2
+  max_retry_attempts: 2
+  protection_mode_failure_threshold: 2
+  skip_run_on_protection_mode: true
 
 notification:
   provider: telegram

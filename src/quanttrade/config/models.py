@@ -69,6 +69,9 @@ class ExecutionConfig:
     simulated_slippage_bps: float = 5.0
     max_fill_ratio_per_bar: float = 0.05
     open_order_timeout_bars: int = 2
+    max_retry_attempts: int = 2
+    protection_mode_failure_threshold: int = 2
+    skip_run_on_protection_mode: bool = True
 
 
 @dataclass(slots=True)

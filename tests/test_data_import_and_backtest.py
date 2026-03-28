@@ -5,6 +5,8 @@ import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
+from uuid import uuid4
 
 from quanttrade.app import QuantTradeApp
 from quanttrade.data.repository import BacktestRunRepository
@@ -19,6 +21,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         db_path: Path,
         max_fill_ratio_per_bar: float = 0.05,
         open_order_timeout_bars: int = 2,
+        max_retry_attempts: int = 2,
+        protection_mode_failure_threshold: int = 2,
+        skip_run_on_protection_mode: bool = True,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -37,6 +42,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     "execution:",
                     f"  max_fill_ratio_per_bar: {max_fill_ratio_per_bar}",
                     f"  open_order_timeout_bars: {open_order_timeout_bars}",
+                    f"  max_retry_attempts: {max_retry_attempts}",
+                    f"  protection_mode_failure_threshold: {protection_mode_failure_threshold}",
+                    f"  skip_run_on_protection_mode: {'true' if skip_run_on_protection_mode else 'false'}",
                 ]
             ),
             encoding="utf-8",
@@ -121,8 +129,12 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertTrue(report_path.exists())
         self.assertEqual(export_result["output_path"], str(report_path))
         self.assertIn("run_id", persist_result)
+        self.assertIn("request_id", persist_result)
         self.assertIn("execution_id", persist_result)
+        self.assertEqual(persist_result["status"], "completed")
         self.assertEqual(persist_result["recovered_executions"], 0)
+        self.assertEqual(persist_result["attempts_used"], 1)
+        self.assertEqual(persist_result["retry_count"], 0)
         self.assertEqual(persist_result["execution"]["attempt_number"], 1)
         self.assertEqual(persist_result["execution"]["recovered_execution_count"], 0)
         self.assertEqual(persist_result["execution"]["consecutive_failures_before_start"], 0)
@@ -190,7 +202,12 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         with database_lock(str(db_path)):
             create_schema(str(db_path))
             repository = BacktestRunRepository(str(db_path))
-            repository.create_execution(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+            repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
 
         persist_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
         recent_executions = app.recent_backtest_executions(limit=5)
@@ -216,11 +233,26 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         with database_lock(str(db_path)):
             create_schema(str(db_path))
             repository = BacktestRunRepository(str(db_path))
-            first = repository.create_execution(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+            first = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
             repository.mark_execution_failed(first, "first failure")
-            second = repository.create_execution(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+            second = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
             repository.mark_execution_failed(second, "second failure")
-            third = repository.create_execution(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+            third = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
             repository.mark_execution_failed(third, "third failure")
 
         recent_executions = app.recent_backtest_executions(limit=5)
@@ -229,6 +261,118 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_executions["executions"][0]["consecutive_failures_before_start"], 2)
         self.assertTrue(recent_executions["executions"][0]["protection_mode"])
         self.assertIn("protection mode", recent_executions["executions"][0]["protection_reason"])
+
+    def test_persist_backtest_run_retries_after_transient_failure(self) -> None:
+        """验证同一次调用里遇到瞬时失败后，会自动创建新 execution 重试并最终成功。"""
+        base_dir = Path("var/test-artifacts/execution-retry")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "retry-test.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 7, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(30):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.7, 2),
+                        "high": round(price + 0.6, 2),
+                        "low": round(price - 1.0, 2),
+                        "close": round(price, 2),
+                        "volume": 2_200_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(config_path, db_path, max_retry_attempts=2)
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+
+        call_count = {"value": 0}
+
+        def flaky_run_series(engine_self, bars, initial_equity):
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                raise RuntimeError("transient failure from retry test")
+            return original_engine_run_series(engine_self, bars=bars, initial_equity=initial_equity)
+
+        from quanttrade.app import BacktestEngine
+
+        original_engine_run_series = BacktestEngine.run_series
+        with patch("quanttrade.app.BacktestEngine.run_series", new=flaky_run_series):
+            persist_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+
+        recent_executions = app.recent_backtest_executions(limit=5)
+
+        self.assertEqual(persist_result["status"], "completed")
+        self.assertIn("request_id", persist_result)
+        self.assertEqual(persist_result["attempts_used"], 2)
+        self.assertEqual(persist_result["retry_count"], 1)
+        self.assertEqual(call_count["value"], 2)
+        self.assertEqual(recent_executions["executions"][0]["status"], "completed")
+        self.assertEqual(recent_executions["executions"][0]["attempt_number"], 2)
+        self.assertEqual(recent_executions["executions"][1]["status"], "failed")
+        self.assertEqual(recent_executions["executions"][0]["request_id"], persist_result["request_id"])
+        self.assertEqual(recent_executions["executions"][1]["request_id"], persist_result["request_id"])
+        self.assertIn("transient failure", recent_executions["executions"][1]["error_message"])
+
+    def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
+        """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""
+        base_dir = Path("var/test-artifacts/execution-blocked")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "blocked-test.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            max_retry_attempts=3,
+            protection_mode_failure_threshold=2,
+            skip_run_on_protection_mode=True,
+        )
+        app = QuantTradeApp(str(config_path))
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            first = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+                protection_mode_failure_threshold=2,
+            )
+            repository.mark_execution_failed(first, "first failure")
+            second = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+                protection_mode_failure_threshold=2,
+            )
+            repository.mark_execution_failed(second, "second failure")
+
+        blocked_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        recent_executions = app.recent_backtest_executions(limit=5)
+
+        self.assertEqual(blocked_result["status"], "blocked")
+        self.assertIsNone(blocked_result["run_id"])
+        self.assertIn("request_id", blocked_result)
+        self.assertEqual(blocked_result["attempts_used"], 1)
+        self.assertEqual(blocked_result["retry_count"], 0)
+        self.assertTrue(blocked_result["execution"]["protection_mode"])
+        self.assertEqual(recent_executions["executions"][0]["request_id"], blocked_result["request_id"])
+        self.assertEqual(recent_executions["executions"][0]["status"], "blocked")
+        self.assertTrue(recent_executions["executions"][0]["protection_mode"])
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""
