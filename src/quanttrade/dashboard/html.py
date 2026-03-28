@@ -813,6 +813,185 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       font-size: 13px;
       box-shadow: var(--shadow-soft);
     }}
+    .app-frame {{
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }}
+    .sidebar {{
+      position: sticky;
+      top: 18px;
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+      border-radius: 28px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.95), rgba(244,248,251,0.95)),
+        var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }}
+    .sidebar-brand {{
+      padding: 14px 14px 16px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, rgba(26,111,216,0.12), rgba(23,122,82,0.08));
+      border: 1px solid rgba(26,111,216,0.12);
+    }}
+    .sidebar-brand-label {{
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }}
+    .sidebar-brand-title {{
+      font-size: 24px;
+      font-weight: 760;
+      letter-spacing: -0.03em;
+      margin-bottom: 8px;
+    }}
+    .sidebar-brand-note {{
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }}
+    .sidebar-section-label {{
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      font-weight: 700;
+      padding: 0 4px;
+    }}
+    .sidebar-nav {{
+      display: grid;
+      gap: 8px;
+    }}
+    .sidebar-button {{
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      width: 100%;
+      text-align: left;
+      padding: 12px 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      cursor: pointer;
+      box-shadow: var(--shadow-soft);
+    }}
+    .sidebar-button.is-active {{
+      border-color: rgba(26,111,216,0.22);
+      background: linear-gradient(180deg, rgba(26,111,216,0.10), rgba(255,255,255,0.96));
+    }}
+    .sidebar-button-kicker {{
+      min-width: 28px;
+      height: 28px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--accent);
+      background: rgba(26,111,216,0.10);
+      border: 1px solid rgba(26,111,216,0.12);
+      font-family: var(--mono);
+    }}
+    .sidebar-button-copy {{
+      min-width: 0;
+    }}
+    .sidebar-button-title {{
+      font-size: 14px;
+      font-weight: 720;
+      margin-bottom: 4px;
+    }}
+    .sidebar-button-note {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }}
+    .sidebar-tip {{
+      padding: 14px;
+      border-radius: 18px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+    }}
+    .sidebar-tip-title {{
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }}
+    .sidebar-tip-copy {{
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }}
+    .workspace-shell {{
+      min-width: 0;
+    }}
+    .workspace-bar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 20px;
+      margin-bottom: 16px;
+      padding: 18px 20px;
+      border-radius: 24px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.96), rgba(244,248,251,0.96)),
+        var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+    }}
+    .workspace-label {{
+      color: var(--accent);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }}
+    .workspace-title {{
+      margin: 0 0 6px;
+      font-size: 26px;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }}
+    .workspace-note {{
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+      max-width: 760px;
+    }}
+    .workspace-pills {{
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
+    }}
+    .workspace-pill {{
+      padding: 10px 12px;
+      border-radius: 999px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }}
+    .workspace-pill strong {{
+      color: var(--text);
+      margin-right: 6px;
+    }}
+    .workspace-panel[data-hidden="true"] {{
+      display: none !important;
+    }}
     .summary-stack {{
       display: grid;
       gap: 18px;
@@ -1069,6 +1248,19 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     .buy {{ color: var(--accent-2); }}
     .sell {{ color: var(--warn); }}
     @media (max-width: 980px) {{
+      .app-frame {{
+        grid-template-columns: 1fr;
+      }}
+      .sidebar {{
+        position: static;
+      }}
+      .workspace-bar {{
+        flex-direction: column;
+        align-items: flex-start;
+      }}
+      .workspace-pills {{
+        justify-content: flex-start;
+      }}
       .hero-shell {{
         grid-template-columns: 1fr;
       }}
@@ -1087,6 +1279,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       .shell {{
         padding: 18px 14px 42px;
       }}
+      .sidebar,
+      .workspace-bar,
       .hero-shell,
       .panel,
       .summary-group {{
@@ -1134,11 +1328,65 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       </nav>
     </section>
 
-    <section id="summary-cards" class="summary-stack"></section>
+    <section class="app-frame">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="sidebar-brand-label">QuantTrade Workspace</div>
+          <div class="sidebar-brand-title">Project Console</div>
+          <div class="sidebar-brand-note">A simplified QuantConnect-style shell with a stable left navigation, an active workspace bar, and focused operational surfaces instead of one endless report.</div>
+        </div>
+        <div class="sidebar-section-label">Workspaces</div>
+        <nav class="sidebar-nav" id="workspace-nav">
+          <button class="sidebar-button" type="button" data-workspace-target="overview">
+            <span class="sidebar-button-kicker">01</span>
+            <span class="sidebar-button-copy"><span class="sidebar-button-title">Overview</span><span class="sidebar-button-note">Scan health, queue pressure, and immediate system posture.</span></span>
+          </button>
+          <button class="sidebar-button" type="button" data-workspace-target="research">
+            <span class="sidebar-button-kicker">02</span>
+            <span class="sidebar-button-copy"><span class="sidebar-button-title">Research</span><span class="sidebar-button-note">Frame the next experiment using recent results and current system context.</span></span>
+          </button>
+          <button class="sidebar-button" type="button" data-workspace-target="backtest">
+            <span class="sidebar-button-kicker">03</span>
+            <span class="sidebar-button-copy"><span class="sidebar-button-title">Backtest</span><span class="sidebar-button-note">Review runs, request chains, executions, orders, and audit traces.</span></span>
+          </button>
+          <button class="sidebar-button" type="button" data-workspace-target="live">
+            <span class="sidebar-button-kicker">04</span>
+            <span class="sidebar-button-copy"><span class="sidebar-button-title">Live</span><span class="sidebar-button-note">Track runner heartbeat, maintenance cadence, and controller operations.</span></span>
+          </button>
+          <button class="sidebar-button" type="button" data-workspace-target="broker">
+            <span class="sidebar-button-kicker">05</span>
+            <span class="sidebar-button-copy"><span class="sidebar-button-title">Broker</span><span class="sidebar-button-note">Inspect sync freshness, external drift, and broker-side state quality.</span></span>
+          </button>
+          <button class="sidebar-button" type="button" data-workspace-target="alerts">
+            <span class="sidebar-button-kicker">06</span>
+            <span class="sidebar-button-copy"><span class="sidebar-button-title">Alerts</span><span class="sidebar-button-note">Work through inbox, owners, SLA pressure, and delivery outcomes.</span></span>
+          </button>
+          <button class="sidebar-button" type="button" data-workspace-target="settings">
+            <span class="sidebar-button-kicker">07</span>
+            <span class="sidebar-button-copy"><span class="sidebar-button-title">Settings</span><span class="sidebar-button-note">See how this static console maps to the full product workflow.</span></span>
+          </button>
+        </nav>
+        <div class="sidebar-tip">
+          <div class="sidebar-tip-title">Operator Flow</div>
+          <div class="sidebar-tip-copy">Start from Overview. If risk signals are quiet, move into Backtest or Research. If something is red, go straight to Live, Broker, or Alerts to investigate by function instead of by raw table order.</div>
+        </div>
+      </aside>
 
-    <section class="layout">
+      <div class="workspace-shell">
+        <header class="workspace-bar">
+          <div>
+            <div class="workspace-label">Active Workspace</div>
+            <h2 id="workspace-title" class="workspace-title">Overview</h2>
+            <div id="workspace-note" class="workspace-note"></div>
+          </div>
+          <div id="workspace-pills" class="workspace-pills"></div>
+        </header>
+
+        <section id="summary-cards" class="summary-stack workspace-panel" data-workspaces="overview"></section>
+
+        <section class="layout">
       <div class="stack">
-        <section id="runs-panel" class="panel">
+        <section id="runs-panel" class="panel workspace-panel" data-workspaces="overview backtest">
           <h2 class="panel-title">Recent Runs</h2>
           <div class="panel-note">Most recent persisted backtest runs</div>
           <div class="table-wrap">
@@ -1159,7 +1407,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section id="runtime-panel" class="panel">
+        <section id="runtime-panel" class="panel workspace-panel" data-workspaces="backtest">
           <h2 class="panel-title">Execution Requests</h2>
           <div class="panel-note">Grouped retry chains keyed by request ID</div>
           <div class="table-wrap">
@@ -1185,7 +1433,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section id="runner-panel" class="panel">
+        <section id="runner-panel" class="panel workspace-panel" data-workspaces="overview backtest">
           <h2 class="panel-title">Request Anomalies</h2>
           <div class="panel-note">Prioritized request chains that deserve investigation first</div>
           <div class="table-wrap">
@@ -1205,7 +1453,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section id="broker-panel" class="panel">
+        <section id="broker-panel" class="panel workspace-panel" data-workspaces="backtest">
           <h2 class="panel-title">Recent Executions</h2>
           <div class="panel-note">Latest controller-level execution attempts, including retries and protection starts</div>
           <div class="toolbar">
@@ -1242,7 +1490,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section id="alerts-panel" class="panel">
+        <section id="alerts-panel" class="panel workspace-panel" data-workspaces="live overview">
           <h2 class="panel-title">Recent Live Cycles</h2>
           <div class="panel-note">Foreground polling cycles that decide whether the controller should run or skip</div>
           <div class="table-wrap">
@@ -1267,7 +1515,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="live overview">
           <h2 class="panel-title">Live Runners</h2>
           <div class="panel-note">Aggregated runner health grouped by runner and market</div>
           <div class="table-wrap">
@@ -1296,7 +1544,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="broker live">
           <h2 class="panel-title">Recent Broker Syncs</h2>
           <div class="panel-note">Read-only broker snapshots normalized into the local controller history</div>
           <div class="table-wrap">
@@ -1324,7 +1572,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       </div>
 
       <div class="stack">
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="overview backtest">
           <h2 class="panel-title">Execution Request Detail</h2>
           <div class="panel-note">Inspect one request-level retry chain before drilling into a specific attempt</div>
           <div id="request-detail-meta" class="muted"></div>
@@ -1349,7 +1597,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="backtest">
           <h2 class="panel-title">Order Lifecycles</h2>
           <div class="panel-note">Grouped order status paths keyed by order ID</div>
           <div class="toolbar">
@@ -1428,7 +1676,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="backtest">
           <h2 class="panel-title">Lifecycle Detail</h2>
           <div class="panel-note">Click an order lifecycle to inspect the underlying event stream</div>
           <div id="lifecycle-detail-meta" class="muted"></div>
@@ -1452,7 +1700,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="backtest">
           <h2 class="panel-title">Execution Detail</h2>
           <div class="panel-note">Click an execution attempt to inspect retry count, protection mode and linked run context</div>
           <div id="execution-detail-meta" class="muted"></div>
@@ -1479,7 +1727,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="backtest">
           <h2 class="panel-title">Recent Orders</h2>
           <div class="panel-note">Latest persisted order events</div>
           <div class="table-wrap">
@@ -1503,7 +1751,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="alerts overview">
           <h2 class="panel-title">Notification Summary</h2>
           <div class="panel-note">Grouped alert categories for faster triage</div>
           <div class="table-wrap">
@@ -1523,7 +1771,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="live">
           <h2 class="panel-title">Recent Maintenance Cycles</h2>
           <div class="panel-note">Controller maintenance runs that reconcile, monitor, escalate and deliver operational work</div>
           <div class="table-wrap">
@@ -1550,7 +1798,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="live">
           <h2 class="panel-title">Maintenance Runners</h2>
           <div class="panel-note">Aggregated health view for maintenance polling loops and their latest cycle heartbeat</div>
           <div class="table-wrap">
@@ -1574,7 +1822,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="broker overview">
           <h2 class="panel-title">Broker Health</h2>
           <div class="panel-note">Freshness and latest status of the most recent broker snapshot</div>
           <div class="table-wrap">
@@ -1598,7 +1846,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="broker overview">
           <h2 class="panel-title">Broker Reconcile</h2>
           <div class="panel-note">Lightweight drift preview between the latest local run snapshot and the latest broker snapshot</div>
           <div id="broker-reconcile-meta" class="muted"></div>
@@ -1619,7 +1867,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="alerts">
           <h2 class="panel-title">Notification Owners</h2>
           <div class="panel-note">Who currently owns the alert queue and how much is still open</div>
           <div class="table-wrap">
@@ -1642,7 +1890,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="alerts">
           <h2 class="panel-title">Notification SLA</h2>
           <div class="panel-note">Assigned alerts that have stayed unacknowledged beyond the configured SLA window</div>
           <div class="table-wrap">
@@ -1665,7 +1913,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="alerts overview">
           <h2 class="panel-title">Notification Inbox</h2>
           <div class="panel-note">Active alerts that still need operator attention</div>
           <div class="table-wrap">
@@ -1691,7 +1939,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="overview live">
           <h2 class="panel-title">Controller Health</h2>
           <div class="panel-note">High-priority controller issues and pending self-heal candidates</div>
           <div class="table-wrap">
@@ -1709,7 +1957,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="alerts">
           <h2 class="panel-title">Recent Notifications</h2>
           <div class="panel-note">Latest controller alerts and local delivery outcomes</div>
           <div class="table-wrap">
@@ -1747,7 +1995,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-panel" data-workspaces="backtest">
           <h2 class="panel-title">Recent Audit Events</h2>
           <div class="panel-note">Latest strategy and risk events</div>
           <div class="table-wrap">
@@ -1763,6 +2011,57 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <tbody id="audit-table"></tbody>
             </table>
           </div>
+        </section>
+        <section class="panel workspace-panel" data-workspaces="research settings">
+          <h2 class="panel-title">Workspace Guide</h2>
+          <div class="panel-note">A bridge panel so the current static export already follows the larger product workflow you asked for.</div>
+          <div class="context-line">Research uses the latest run snapshot, anomaly ranking, broker drift, and health summaries to decide what to test next.</div>
+          <div class="context-line">Settings is reserved for the future project configuration flow: strategy parameters, runner behavior, broker connections, and alert routing. In this static console it stays visible as a structural placeholder, so the product frame already matches the intended habit loop.</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Workspace</th>
+                  <th>Current Static Surface</th>
+                  <th>Future Product Intent</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Overview</td>
+                  <td>Scorecards, controller health, notification inbox, recent runs</td>
+                  <td>Project landing page and operational snapshot</td>
+                </tr>
+                <tr>
+                  <td>Research</td>
+                  <td>Guide and summary-driven decision framing</td>
+                  <td>Notebook-style exploration, experiment notes, factor checks</td>
+                </tr>
+                <tr>
+                  <td>Backtest</td>
+                  <td>Runs, requests, executions, lifecycles, audit</td>
+                  <td>Project-centered backtest analysis and parameter review</td>
+                </tr>
+                <tr>
+                  <td>Live</td>
+                  <td>Live cycles, live runners, maintenance cycles</td>
+                  <td>Runner control surface and operating heartbeat board</td>
+                </tr>
+                <tr>
+                  <td>Broker</td>
+                  <td>Broker syncs, health, reconcile drift</td>
+                  <td>Account sync, holdings, order sync, and reconciliation</td>
+                </tr>
+                <tr>
+                  <td>Alerts</td>
+                  <td>Inbox, owners, SLA, recent notifications</td>
+                  <td>Daily operator queue and resolution workflow</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
         </section>
       </div>
     </section>
@@ -1790,6 +2089,71 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     function availableRunIds() {{
       return payload.runs_table.map(run => run.run_id);
     }}
+    const WORKSPACE_META = {{
+      overview: {{
+        title: "Overview",
+        note: "Start here. This workspace concentrates the main system posture before you switch into a more specialized flow.",
+        pills: [
+          {{ label: "Controller Issues", value: payload.history_summary.controller_health_issues }},
+          {{ label: "Critical Alerts", value: payload.history_summary.critical_notifications }},
+          {{ label: "Broker Drift", value: payload.history_summary.broker_reconcile_mismatches }},
+        ],
+      }},
+      research: {{
+        title: "Research",
+        note: "A simplified placeholder for the future research environment. It already keeps the larger product layout aligned with QuantConnect-style habits.",
+        pills: [
+          {{ label: "Latest Symbol", value: payload.history_summary.latest_symbol || "-" }},
+          {{ label: "Latest Return %", value: payload.history_summary.latest_return_pct }},
+          {{ label: "Latest Sharpe", value: payload.history_summary.latest_sharpe_ratio }},
+        ],
+      }},
+      backtest: {{
+        title: "Backtest",
+        note: "Use this view to review the full offline chain: runs, requests, executions, orders, and audit evidence.",
+        pills: [
+          {{ label: "Runs", value: payload.history_summary.total_runs }},
+          {{ label: "Requests", value: payload.history_summary.total_execution_requests }},
+          {{ label: "Executions", value: payload.history_summary.total_executions }},
+        ],
+      }},
+      live: {{
+        title: "Live",
+        note: "Runner heartbeat and maintenance cadence. This is the operational surface that most closely resembles a live trading console.",
+        pills: [
+          {{ label: "Live Runners", value: payload.history_summary.live_runners }},
+          {{ label: "Stalled Live", value: payload.history_summary.stalled_live_runners }},
+          {{ label: "Stalled Maintenance", value: payload.history_summary.stalled_maintenance_runners }},
+        ],
+      }},
+      broker: {{
+        title: "Broker",
+        note: "Freshness, sync quality, and local-versus-broker drift are grouped here so external state does not get lost inside backtest tables.",
+        pills: [
+          {{ label: "Broker Syncs", value: payload.history_summary.total_broker_syncs }},
+          {{ label: "Failed Syncs", value: payload.history_summary.failed_broker_syncs }},
+          {{ label: "Drift", value: payload.history_summary.broker_reconcile_mismatches }},
+        ],
+      }},
+      alerts: {{
+        title: "Alerts",
+        note: "Treat this as the operator queue: inbox, ownership, SLA pressure, and delivery outcomes all live together.",
+        pills: [
+          {{ label: "Active", value: payload.history_summary.active_notifications }},
+          {{ label: "Unacked", value: payload.history_summary.unacknowledged_notifications }},
+          {{ label: "SLA Breached", value: payload.history_summary.sla_breached_notifications }},
+        ],
+      }},
+      settings: {{
+        title: "Settings",
+        note: "This static page does not edit configuration yet, but the workflow slot is already in place so the product frame stays consistent.",
+        pills: [
+          {{ label: "Live Mode", value: payload.history_summary.live_runners ? "configured" : "idle" }},
+          {{ label: "Broker Mode", value: payload.history_summary.total_broker_syncs ? "configured" : "off" }},
+          {{ label: "Alert Flow", value: payload.history_summary.total_notifications ? "active" : "quiet" }},
+        ],
+      }},
+    }};
     function hydrateRunFilter() {{
       // run 下拉框来自真实运行记录，而不是写死在页面里。
       const select = document.getElementById("run-filter");
@@ -1804,6 +2168,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     function readHashState() {{
       // 所有筛选状态都从 URL hash 中恢复，这样页面可以被分享和复现。
       const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const workspace = params.get("workspace") || "overview";
       const runId = params.get("run") || "all";
       const lifecycleFilter = params.get("filter") || "all";
       const side = params.get("side") || "all";
@@ -1816,6 +2181,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const executionId = params.get("execution") || "";
       const orderId = params.get("order") || "";
       return {{
+        workspace: Object.hasOwn(WORKSPACE_META, workspace) ? workspace : "overview",
         runId: availableRunIds().includes(runId) ? runId : "all",
         lifecycleFilter: ["all", "filled", "cancelled", "open", "repriced"].includes(lifecycleFilter) ? lifecycleFilter : "all",
         side: ["all", "BUY", "SELL"].includes(side) ? side : "all",
@@ -1833,6 +2199,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     function writeHashState() {{
       // 每次筛选变化后都同步回地址栏，保证“当前所见就是当前链接”。
       const params = new URLSearchParams();
+      if (state.workspace !== "overview") params.set("workspace", state.workspace);
       if (state.runId !== "all") params.set("run", state.runId);
       if (state.lifecycleFilter !== "all") params.set("filter", state.lifecycleFilter);
       if (state.side !== "all") params.set("side", state.side);
@@ -1860,6 +2227,21 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("execution-status-filter").value = state.executionStatus;
       document.getElementById("notification-status-filter").value = state.notificationStatus;
       document.getElementById("notification-owner-filter").value = state.notificationOwner;
+    }}
+    function renderWorkspaceChrome() {{
+      const meta = WORKSPACE_META[state.workspace] || WORKSPACE_META.overview;
+      document.getElementById("workspace-title").textContent = meta.title;
+      document.getElementById("workspace-note").textContent = meta.note;
+      document.getElementById("workspace-pills").innerHTML = (meta.pills || []).map(pill => `
+        <div class="workspace-pill"><strong>${{pill.label}}</strong>${{fmt(pill.value)}}</div>
+      `).join("");
+      document.querySelectorAll("[data-workspace-target]").forEach(node => {{
+        node.classList.toggle("is-active", node.getAttribute("data-workspace-target") === state.workspace);
+      }});
+      document.querySelectorAll("[data-workspaces]").forEach(node => {{
+        const workspaces = String(node.getAttribute("data-workspaces") || "").split(/\\s+/).filter(Boolean);
+        node.setAttribute("data-hidden", workspaces.includes(state.workspace) ? "false" : "true");
+      }});
     }}
     function filteredLifecycleCount() {{
       return filteredLifecycles().filter(order => state.focus === "all" || isAnomaly(order)).length;
@@ -2682,6 +3064,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     }}
     function renderAll() {{
       // 所有页面更新都走同一个总入口，避免多个函数各自改一半状态。
+      renderWorkspaceChrome();
       syncControlsToState();
       renderContext();
       renderRuns();
@@ -2697,6 +3080,12 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     hydrateRunFilter();
     renderCards();
     renderAll();
+    document.querySelectorAll("[data-workspace-target]").forEach(node => {{
+      node.addEventListener("click", () => {{
+        state.workspace = node.getAttribute("data-workspace-target") || "overview";
+        renderAll();
+      }});
+    }});
     document.getElementById("run-filter").addEventListener("change", event => {{
       state.runId = event.target.value || "all";
       renderAll();
@@ -2746,12 +3135,14 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     document.getElementById("copy-link").addEventListener("click", copyCurrentLink);
     window.addEventListener("hashchange", () => {{
       const next = readHashState();
+      state.workspace = next.workspace;
       state.runId = next.runId;
       state.lifecycleFilter = next.lifecycleFilter;
       state.side = next.side;
       state.broker = next.broker;
       state.focus = next.focus;
       state.notificationStatus = next.notificationStatus;
+      state.notificationOwner = next.notificationOwner;
       state.executionStatus = next.executionStatus;
       state.requestId = next.requestId;
       state.executionId = next.executionId;
