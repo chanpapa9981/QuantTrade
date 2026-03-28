@@ -45,6 +45,12 @@ execution:
   protection_trigger_failure_classes: ""
   reconcile_on_write: true
 
+live:
+  enabled: false
+  runner_id: local-default
+  poll_interval_seconds: 60.0
+  max_cycles_per_run: 1
+
 notification:
   provider: telegram
   enabled: false

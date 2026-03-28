@@ -82,6 +82,7 @@ class QuantTradeApp:
             "data_path": self.settings.data.duckdb_path,
             "data_backend": self.settings.data.backend,
             "execution": asdict(self.settings.execution),
+            "live": asdict(self.settings.live),
             "notification": asdict(self.settings.notification),
         }
 
@@ -144,6 +145,14 @@ class QuantTradeApp:
         engine = BacktestEngine(strategy, risk_engine, execution_engine)
         result = engine.run_series(bars=bars, initial_equity=initial_equity)
         return asdict(result)
+
+    def _effective_live_runner_id(self, runner_id: str = "") -> str:
+        """返回本次 live cycle 应该使用的 runner 标识。"""
+        normalized = str(runner_id or "").strip()
+        if normalized:
+            return normalized
+        fallback = str(self.settings.live.runner_id or "").strip()
+        return fallback or "local-default"
 
     def _classify_execution_error(self, exc: Exception) -> dict[str, object]:
         """把一次执行异常翻译成运行控制器可理解的决策信息。
@@ -752,6 +761,184 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"notifications": repository.fetch_recent_notification_events(limit=limit)}
 
+    def recent_live_cycles(self, limit: int = 20) -> dict[str, object]:
+        """查询最近的 live runner 周期。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"live_cycles": repository.fetch_recent_live_cycles(limit=limit)}
+
+    def live_runner_status(self, limit: int = 20) -> dict[str, object]:
+        """查看 live runner 汇总状态。"""
+        history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
+        return {"summary": history_payload["live_runner_summary"]}
+
+    def live_cycle_detail(self, cycle_id: str) -> dict[str, object]:
+        """查看单个 live cycle 的完整详情。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"cycle": repository.fetch_live_cycle_detail(cycle_id=cycle_id)}
+
+    def live_run_cycle(
+        self,
+        *,
+        symbol: str,
+        timeframe: str = "1d",
+        initial_equity: float = 100_000.0,
+        runner_id: str = "",
+    ) -> dict[str, object]:
+        """执行一次 live runner 周期。
+
+        当前阶段的 live runner 仍然基于本地历史数据，但它已经具备了
+        “轮询周期”的基本语义：
+        1. 先看最新 bar 水位；
+        2. 如果没有新数据，就显式记一次 skipped cycle；
+        3. 如果有新数据，就走完整持久化回测，并把 request/execution/run 串回这个周期。
+        """
+        effective_runner_id = self._effective_live_runner_id(runner_id)
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            bar_repository = BarRepository(self.settings.data.duckdb_path)
+            latest_bar = bar_repository.fetch_latest_bar_summary(symbol=symbol, timeframe=timeframe)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            previous_cycle = repository.fetch_latest_live_cycle_watermark(
+                runner_id=effective_runner_id,
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+            cycle_id = repository.create_live_cycle(
+                runner_id=effective_runner_id,
+                symbol=symbol,
+                timeframe=timeframe,
+                initial_equity=initial_equity,
+                latest_bar_at=str(latest_bar.get("latest_bar_at", "")),
+                processed_bar_count=int(latest_bar.get("bar_count", 0)),
+            )
+
+        latest_bar_at = str(latest_bar.get("latest_bar_at", ""))
+        bar_count = int(latest_bar.get("bar_count", 0))
+        if not latest_bar_at or bar_count <= 0:
+            with database_lock(self.settings.data.duckdb_path):
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                repository.finish_live_cycle(
+                    cycle_id=cycle_id,
+                    status="skipped",
+                    latest_bar_at=latest_bar_at,
+                    processed_bar_count=bar_count,
+                    skip_reason="no_data",
+                    cycle_note="live cycle skipped because no bars were available",
+                )
+                detail = repository.fetch_live_cycle_detail(cycle_id=cycle_id)
+            return {"status": "skipped", "cycle": detail, "runner_id": effective_runner_id}
+
+        previous_bar_at = str(previous_cycle.get("latest_bar_at", "")) if previous_cycle else ""
+        if previous_bar_at and previous_bar_at == latest_bar_at:
+            with database_lock(self.settings.data.duckdb_path):
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                repository.finish_live_cycle(
+                    cycle_id=cycle_id,
+                    status="skipped",
+                    latest_bar_at=latest_bar_at,
+                    processed_bar_count=bar_count,
+                    skip_reason="no_new_data",
+                    cycle_note="live cycle skipped because market watermark did not advance",
+                )
+                detail = repository.fetch_live_cycle_detail(cycle_id=cycle_id)
+            return {"status": "skipped", "cycle": detail, "runner_id": effective_runner_id}
+
+        try:
+            persisted = self.persist_backtest_run(
+                symbol=symbol,
+                timeframe=timeframe,
+                initial_equity=initial_equity,
+            )
+        except Exception as exc:
+            with database_lock(self.settings.data.duckdb_path):
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                repository.finish_live_cycle(
+                    cycle_id=cycle_id,
+                    status="failed",
+                    latest_bar_at=latest_bar_at,
+                    processed_bar_count=bar_count,
+                    error_message=str(exc),
+                    protection_mode=False,
+                    cycle_note="live cycle failed before a persisted run could complete",
+                )
+                detail = repository.fetch_live_cycle_detail(cycle_id=cycle_id)
+            self._record_notification(
+                severity="error",
+                category="live_cycle_failed",
+                title="Live cycle failed",
+                message=str(exc),
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+            return {"status": "failed", "cycle": detail, "runner_id": effective_runner_id}
+
+        execution_payload = persisted.get("execution") or {}
+        final_status = str(persisted.get("status", "completed"))
+        cycle_status = "completed" if final_status == "completed" else "blocked" if final_status == "blocked" else "failed"
+        skip_reason = "protection_mode" if cycle_status == "blocked" else ""
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            repository.finish_live_cycle(
+                cycle_id=cycle_id,
+                status=cycle_status,
+                latest_bar_at=latest_bar_at,
+                processed_bar_count=bar_count,
+                request_id=str(persisted.get("request_id", "")),
+                execution_id=str(persisted.get("execution_id", "")),
+                run_id=str(persisted.get("run_id") or ""),
+                skip_reason=skip_reason,
+                error_message=str(persisted.get("message", "")) if cycle_status != "completed" else "",
+                protection_mode=bool(execution_payload.get("protection_mode")),
+                cycle_note=f"live cycle ended with persisted status {final_status}",
+            )
+            detail = repository.fetch_live_cycle_detail(cycle_id=cycle_id)
+        return {
+            "status": cycle_status,
+            "runner_id": effective_runner_id,
+            "cycle": detail,
+            "persisted_run": persisted,
+        }
+
+    def run_live_runner(
+        self,
+        *,
+        symbol: str,
+        timeframe: str = "1d",
+        initial_equity: float = 100_000.0,
+        runner_id: str = "",
+        cycles: int | None = None,
+    ) -> dict[str, object]:
+        """按配置或调用参数连续执行多轮 live cycle。
+
+        当前这还不是后台 daemon，而是一个“可重复执行的前台 runner skeleton”。
+        但它已经把轮询间隔、runner_id 和周期结果列表这些长期运行需要的基本概念补齐了。
+        """
+        effective_runner_id = self._effective_live_runner_id(runner_id)
+        cycle_limit = max(int(cycles or self.settings.live.max_cycles_per_run), 1)
+        poll_interval_seconds = max(float(self.settings.live.poll_interval_seconds), 0.0)
+        results: list[dict[str, object]] = []
+        for index in range(cycle_limit):
+            results.append(
+                self.live_run_cycle(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    initial_equity=initial_equity,
+                    runner_id=effective_runner_id,
+                )
+            )
+            if index < cycle_limit - 1 and poll_interval_seconds > 0:
+                time.sleep(poll_interval_seconds)
+        return {
+            "runner_id": effective_runner_id,
+            "cycles_requested": cycle_limit,
+            "poll_interval_seconds": poll_interval_seconds,
+            "results": results,
+        }
+
     def notification_summary(self, limit: int = 50) -> dict[str, object]:
         """汇总最近通知事件，方便快速看近况而不是逐条翻告警。"""
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
@@ -1063,6 +1250,7 @@ class QuantTradeApp:
             return build_history_payload(
                 bundle["runs"],
                 bundle["executions"],
+                bundle["live_cycles"],
                 bundle["orders"],
                 bundle["audit_events"],
                 bundle["notification_events"],

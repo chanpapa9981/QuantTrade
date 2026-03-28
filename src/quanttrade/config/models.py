@@ -100,6 +100,16 @@ class ExecutionConfig:
 
 
 @dataclass(slots=True)
+class LiveConfig:
+    """常驻运行骨架配置。"""
+
+    enabled: bool = False
+    runner_id: str = "local-default"
+    poll_interval_seconds: float = 60.0
+    max_cycles_per_run: int = 1
+
+
+@dataclass(slots=True)
 class Settings:
     """项目完整配置集合。"""
 
@@ -108,4 +118,5 @@ class Settings:
     risk: RiskConfig = field(default_factory=RiskConfig)
     data: DataConfig = field(default_factory=DataConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    live: LiveConfig = field(default_factory=LiveConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)

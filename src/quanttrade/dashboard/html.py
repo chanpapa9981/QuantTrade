@@ -984,6 +984,57 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
             </table>
           </div>
         </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Recent Live Cycles</h2>
+          <div class="panel-note">Foreground polling cycles that decide whether the controller should run or skip</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cycle ID</th>
+                  <th>Runner</th>
+                  <th>Status</th>
+                  <th>Latest Bar</th>
+                  <th>Bars</th>
+                  <th>Request ID</th>
+                  <th>Execution ID</th>
+                  <th>Run ID</th>
+                  <th>Skip Reason</th>
+                  <th>Protection</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody id="live-cycle-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Live Runners</h2>
+          <div class="panel-note">Aggregated runner health grouped by runner and market</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Runner</th>
+                  <th>Market</th>
+                  <th>Latest</th>
+                  <th>Cycles</th>
+                  <th>Completed</th>
+                  <th>Skipped</th>
+                  <th>Blocked</th>
+                  <th>Failed</th>
+                  <th>Idle Streak</th>
+                  <th>Protection Hits</th>
+                  <th>Last Success</th>
+                  <th>Latest Bar</th>
+                </tr>
+              </thead>
+              <tbody id="live-runner-table"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
 
       <div class="stack">
@@ -1457,6 +1508,13 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Anomalous Requests", value: summary.anomalous_execution_requests }},
         {{ label: "Critical Requests", value: summary.critical_execution_requests }},
         {{ label: "Cooldown Active", value: summary.cooldown_protected_requests }},
+        {{ label: "Live Cycles", value: summary.total_live_cycles }},
+        {{ label: "Live Completed", value: summary.completed_live_cycles }},
+        {{ label: "Live Skipped", value: summary.skipped_live_cycles }},
+        {{ label: "Live Blocked", value: summary.blocked_live_cycles }},
+        {{ label: "Live Failed", value: summary.failed_live_cycles }},
+        {{ label: "Live Runners", value: summary.live_runners }},
+        {{ label: "Idle Runners", value: summary.idle_live_runners }},
         {{ label: "Notifications", value: summary.total_notifications }},
         {{ label: "Critical Alerts", value: summary.critical_notifications }},
         {{ label: "Queued Alerts", value: summary.queued_notifications }},
@@ -1661,6 +1719,52 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         }});
       }});
       renderExecutionDetail();
+    }}
+    function renderLiveCycles() {{
+      // live cycle 是 execution 之外再上一层的 runner 周期视角。
+      const rows = (payload.recent_live_cycles || []).filter(cycle => {{
+        if (state.runId !== "all" && cycle.run_id && cycle.run_id !== state.runId) return false;
+        if (state.requestId && cycle.request_id && cycle.request_id !== state.requestId) return false;
+        if (state.executionId && cycle.execution_id && cycle.execution_id !== state.executionId) return false;
+        return true;
+      }});
+      document.getElementById("live-cycle-table").innerHTML = rows.length ? rows.map(cycle => `
+        <tr class="${{cycle.status === "failed" || cycle.status === "blocked" ? "row-anomaly" : ""}}">
+          <td>${{cycle.cycle_id}}</td>
+          <td>${{cycle.runner_id}}</td>
+          <td>${{cycle.status}}</td>
+          <td>${{cycle.latest_bar_at || ""}}</td>
+          <td>${{fmt(cycle.processed_bar_count)}}</td>
+          <td>${{cycle.request_id || ""}}</td>
+          <td>${{cycle.execution_id || ""}}</td>
+          <td>${{cycle.run_id || ""}}</td>
+          <td>${{cycle.skip_reason || ""}}</td>
+          <td>${{cycle.protection_mode ? "on" : "off"}}</td>
+          <td>${{cycle.cycle_note || cycle.error_message || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="11" class="muted">No live cycles in the current view.</td></tr>';
+      const runnerRows = (payload.live_runner_summary || []).filter(row => {{
+        if (state.runId !== "all" && !rows.some(cycle => cycle.run_id === state.runId && cycle.runner_id === row.runner_id && cycle.symbol === row.symbol && cycle.timeframe === row.timeframe)) {{
+          return false;
+        }}
+        return true;
+      }});
+      document.getElementById("live-runner-table").innerHTML = runnerRows.length ? runnerRows.map(row => `
+        <tr class="${{row.latest_status === "failed" || row.latest_status === "blocked" ? "row-anomaly" : ""}}">
+          <td>${{row.runner_id}}</td>
+          <td>${{row.symbol}} / ${{row.timeframe}}</td>
+          <td>${{row.latest_status}}</td>
+          <td>${{fmt(row.cycle_count)}}</td>
+          <td>${{fmt(row.completed_count)}}</td>
+          <td>${{fmt(row.skipped_count)}}</td>
+          <td>${{fmt(row.blocked_count)}}</td>
+          <td>${{fmt(row.failed_count)}}</td>
+          <td>${{fmt(row.idle_streak)}}</td>
+          <td>${{fmt(row.protection_hits)}}</td>
+          <td>${{row.last_success_at || ""}}</td>
+          <td>${{row.latest_bar_at || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="12" class="muted">No live runner summary rows in the current view.</td></tr>';
     }}
     function renderExecutionDetail() {{
       // 详情面板把一次执行尝试的“控制器级状态”摊开，便于判断是否要继续追订单层。
@@ -2001,6 +2105,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       renderRuns();
       renderRequestChains();
       renderExecutions();
+      renderLiveCycles();
       renderLifecycles();
       renderOrders();
       renderNotifications();

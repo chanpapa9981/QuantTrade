@@ -58,6 +58,23 @@ def build_parser() -> argparse.ArgumentParser:
     execution_detail_parser.add_argument("--execution-id", required=True, help="Execution attempt id")
     execution_request_detail_parser = subparsers.add_parser("execution-request-detail", help="Show one request-level execution chain detail")
     execution_request_detail_parser.add_argument("--request-id", required=True, help="Execution request id")
+    live_run_once_parser = subparsers.add_parser("live-run-once", help="Run one live runner cycle")
+    live_run_once_parser.add_argument("--symbol", required=True, help="Ticker symbol")
+    live_run_once_parser.add_argument("--timeframe", default="1d", help="Bar timeframe")
+    live_run_once_parser.add_argument("--initial-equity", type=float, default=100_000.0, help="Starting equity")
+    live_run_once_parser.add_argument("--runner-id", default="", help="Optional live runner identifier")
+    live_runner_parser = subparsers.add_parser("live-runner", help="Run multiple live runner cycles in sequence")
+    live_runner_parser.add_argument("--symbol", required=True, help="Ticker symbol")
+    live_runner_parser.add_argument("--timeframe", default="1d", help="Bar timeframe")
+    live_runner_parser.add_argument("--initial-equity", type=float, default=100_000.0, help="Starting equity")
+    live_runner_parser.add_argument("--runner-id", default="", help="Optional live runner identifier")
+    live_runner_parser.add_argument("--cycles", type=int, help="How many cycles to run in this foreground session")
+    live_runner_status_parser = subparsers.add_parser("live-runner-status", help="Show aggregated live runner status rows")
+    live_runner_status_parser.add_argument("--limit", type=int, default=20, help="Number of recent live cycles to inspect")
+    live_cycles_parser = subparsers.add_parser("live-cycles", help="List recent live runner cycles")
+    live_cycles_parser.add_argument("--limit", type=int, default=20, help="Number of live cycles to list")
+    live_cycle_detail_parser = subparsers.add_parser("live-cycle-detail", help="Show one live runner cycle detail")
+    live_cycle_detail_parser.add_argument("--cycle-id", required=True, help="Live cycle id")
     protection_status_parser = subparsers.add_parser("protection-status", help="Show protection mode state for one symbol/timeframe")
     protection_status_parser.add_argument("--symbol", required=True, help="Ticker symbol")
     protection_status_parser.add_argument("--timeframe", default="1d", help="Bar timeframe")
@@ -231,6 +248,49 @@ def main() -> None:
 
     if args.command == "execution-request-detail":
         print(json.dumps(app.execution_request_detail(request_id=args.request_id), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "live-run-once":
+        print(
+            json.dumps(
+                app.live_run_cycle(
+                    symbol=args.symbol,
+                    timeframe=args.timeframe,
+                    initial_equity=args.initial_equity,
+                    runner_id=args.runner_id,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if args.command == "live-runner":
+        print(
+            json.dumps(
+                app.run_live_runner(
+                    symbol=args.symbol,
+                    timeframe=args.timeframe,
+                    initial_equity=args.initial_equity,
+                    runner_id=args.runner_id,
+                    cycles=args.cycles,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if args.command == "live-runner-status":
+        print(json.dumps(app.live_runner_status(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "live-cycles":
+        print(json.dumps(app.recent_live_cycles(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "live-cycle-detail":
+        print(json.dumps(app.live_cycle_detail(cycle_id=args.cycle_id), indent=2, ensure_ascii=False))
         return
 
     if args.command == "protection-status":

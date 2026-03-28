@@ -382,6 +382,60 @@ def _build_controller_health(
     }
 
 
+def _build_live_runner_summary(live_cycles: list[dict[str, object]]) -> list[dict[str, object]]:
+    """按 runner + market 汇总 live cycle，帮助观察轮询器健康度。"""
+    grouped: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    for cycle in live_cycles:
+        key = (
+            str(cycle.get("runner_id", "")).strip(),
+            str(cycle.get("symbol", "")).strip(),
+            str(cycle.get("timeframe", "")).strip(),
+        )
+        grouped.setdefault(key, []).append(cycle)
+
+    rows: list[dict[str, object]] = []
+    for key, cycles in grouped.items():
+        ordered = sorted(cycles, key=lambda item: str(item.get("started_at", "")), reverse=True)
+        latest = ordered[0]
+        idle_streak = 0
+        for cycle in ordered:
+            if str(cycle.get("status", "")) == "skipped" and str(cycle.get("skip_reason", "")) == "no_new_data":
+                idle_streak += 1
+                continue
+            break
+        last_success_at = next(
+            (str(item.get("finished_at", "")) for item in ordered if item.get("status") == "completed"),
+            "",
+        )
+        rows.append(
+            {
+                "runner_id": key[0],
+                "symbol": key[1],
+                "timeframe": key[2],
+                "cycle_count": len(ordered),
+                "latest_status": str(latest.get("status", "")),
+                "last_cycle_at": str(latest.get("started_at", "")),
+                "latest_bar_at": str(latest.get("latest_bar_at", "")),
+                "completed_count": len([item for item in ordered if item.get("status") == "completed"]),
+                "skipped_count": len([item for item in ordered if item.get("status") == "skipped"]),
+                "blocked_count": len([item for item in ordered if item.get("status") == "blocked"]),
+                "failed_count": len([item for item in ordered if item.get("status") == "failed"]),
+                "protection_hits": len([item for item in ordered if item.get("protection_mode")]),
+                "idle_streak": idle_streak,
+                "last_success_at": last_success_at,
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            str(item.get("latest_status", "")) not in {"blocked", "failed"},
+            -int(item.get("idle_streak", 0)),
+            -int(item.get("cycle_count", 0)),
+            str(item.get("last_cycle_at", "")),
+        )
+    )
+    return rows
+
+
 def _build_notification_sla_summary(
     notification_events: list[dict[str, object]],
     assignment_sla_seconds: int,
@@ -628,6 +682,7 @@ def build_dashboard_payload(
 def build_history_payload(
     runs: list[dict[str, object]],
     executions: list[dict[str, object]],
+    live_cycles: list[dict[str, object]],
     orders: list[dict[str, object]],
     audit_events: list[dict[str, object]],
     notification_events: list[dict[str, object]],
@@ -644,6 +699,7 @@ def build_history_payload(
     notification_summary = _build_notification_summary(notification_events)
     notification_owner_summary = _build_notification_owner_summary(notification_events)
     notification_inbox = _build_notification_inbox(notification_events)
+    live_runner_summary = _build_live_runner_summary(live_cycles)
     notification_sla_summary = _build_notification_sla_summary(
         notification_events,
         assignment_sla_seconds=max(int(notification_assignment_sla_seconds), 0),
@@ -676,6 +732,14 @@ def build_history_payload(
                 [item for item in execution_requests if item.get("health_label") == "critical"]
             ),
             "cooldown_protected_requests": len([item for item in execution_requests if item.get("cooldown_active")]),
+            "total_live_cycles": len(live_cycles),
+            "completed_live_cycles": len([item for item in live_cycles if item.get("status") == "completed"]),
+            "skipped_live_cycles": len([item for item in live_cycles if item.get("status") == "skipped"]),
+            "blocked_live_cycles": len([item for item in live_cycles if item.get("status") == "blocked"]),
+            "failed_live_cycles": len([item for item in live_cycles if item.get("status") == "failed"]),
+            "running_live_cycles": len([item for item in live_cycles if item.get("status") == "running"]),
+            "live_runners": len(live_runner_summary),
+            "idle_live_runners": len([item for item in live_runner_summary if int(item.get("idle_streak", 0)) > 0]),
             "total_notifications": len(notification_events),
             "critical_notifications": len([item for item in notification_events if item.get("severity") == "critical"]),
             "queued_notifications": len([item for item in notification_events if item.get("delivery_status") == "queued"]),
@@ -772,6 +836,8 @@ def build_history_payload(
         "execution_request_details": execution_request_details,
         "request_anomalies": request_anomalies[:8],
         "recent_executions": executions,
+        "recent_live_cycles": live_cycles,
+        "live_runner_summary": live_runner_summary[:8],
         "notification_summary": notification_summary[:8],
         "notification_owner_summary": notification_owner_summary[:8],
         "notification_inbox": notification_inbox[:12],

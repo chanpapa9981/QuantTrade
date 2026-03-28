@@ -146,6 +146,29 @@ def create_schema(db_path: str) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_backtest_executions_symbol_timeframe_status
             ON backtest_executions(symbol, timeframe, status, started_at);
+
+            CREATE TABLE IF NOT EXISTS live_runner_cycles (
+                cycle_id TEXT PRIMARY KEY,
+                runner_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                initial_equity REAL NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL DEFAULT '',
+                latest_bar_at TEXT NOT NULL DEFAULT '',
+                processed_bar_count INTEGER NOT NULL DEFAULT 0,
+                request_id TEXT NOT NULL DEFAULT '',
+                execution_id TEXT NOT NULL DEFAULT '',
+                run_id TEXT NOT NULL DEFAULT '',
+                skip_reason TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                protection_mode INTEGER NOT NULL DEFAULT 0,
+                cycle_note TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_live_runner_cycles_runner_market_started
+            ON live_runner_cycles(runner_id, symbol, timeframe, started_at);
             """
         )
         # 历史版本数据库可能没有这些字段，所以这里用增量迁移方式自动补齐。
@@ -191,5 +214,15 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS retryable INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS retry_decision TEXT DEFAULT '';")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS failure_class TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS finished_at TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS latest_bar_at TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS processed_bar_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS request_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS execution_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS run_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS skip_reason TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS error_message TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS protection_mode INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE live_runner_cycles ADD COLUMN IF NOT EXISTS cycle_note TEXT DEFAULT '';")
     finally:
         connection.close()

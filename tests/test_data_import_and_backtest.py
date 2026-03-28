@@ -53,6 +53,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         execution_non_retryable_failure_classes: str = "NonRetryableExecutionError",
         execution_protection_trigger_failure_classes: str = "",
         execution_reconcile_on_write: bool = True,
+        live_enabled: bool = False,
+        live_runner_id: str = "local-default",
+        live_poll_interval_seconds: float = 0.0,
+        live_max_cycles_per_run: int = 1,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -83,6 +87,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  non_retryable_failure_classes: {execution_non_retryable_failure_classes}",
                     f"  protection_trigger_failure_classes: {execution_protection_trigger_failure_classes}",
                     f"  reconcile_on_write: {'true' if execution_reconcile_on_write else 'false'}",
+                    "live:",
+                    f"  enabled: {'true' if live_enabled else 'false'}",
+                    f"  runner_id: {live_runner_id}",
+                    f"  poll_interval_seconds: {live_poll_interval_seconds}",
+                    f"  max_cycles_per_run: {live_max_cycles_per_run}",
                     "notification:",
                     f"  provider: {notification_provider}",
                     f"  enabled: {'true' if notification_enabled else 'false'}",
@@ -283,11 +292,18 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("stale_execution_candidates", history_payload["history_summary"])
         self.assertIn("runtime_reconcile_candidates", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
+        self.assertIn("recent_live_cycles", history_payload)
         self.assertIn("recent_notifications", history_payload)
         self.assertIn("notification_owner_summary", history_payload)
         self.assertIn("notification_inbox", history_payload)
         self.assertIn("notification_sla_summary", history_payload)
         self.assertIn("controller_health", history_payload)
+        self.assertIn("total_live_cycles", history_payload["history_summary"])
+        self.assertIn("completed_live_cycles", history_payload["history_summary"])
+        self.assertIn("skipped_live_cycles", history_payload["history_summary"])
+        self.assertIn("live_runners", history_payload["history_summary"])
+        self.assertIn("idle_live_runners", history_payload["history_summary"])
+        self.assertIn("live_runner_summary", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""
@@ -340,6 +356,181 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_executions["executions"][0]["attempt_number"], 2)
         self.assertEqual(recent_executions["executions"][0]["recovered_execution_count"], 1)
         self.assertEqual(recent_executions["executions"][1]["status"], "abandoned")
+
+    def test_live_run_cycle_completes_and_links_persisted_run(self) -> None:
+        """验证 live cycle 在检测到新数据时会落成一次完整 persisted run。"""
+        base_dir = Path("var/test-artifacts/live-cycle-complete")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "live-cycle-complete.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 6, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(30):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.6, 2),
+                        "high": round(price + 0.7, 2),
+                        "low": round(price - 1.0, 2),
+                        "close": round(price, 2),
+                        "volume": 2_200_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(
+            config_path,
+            db_path,
+            live_enabled=True,
+            live_runner_id="paper-runner",
+            live_poll_interval_seconds=0.0,
+            live_max_cycles_per_run=1,
+        )
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+
+        cycle_result = app.live_run_cycle(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        recent_cycles = app.recent_live_cycles(limit=5)["live_cycles"]
+
+        self.assertEqual(cycle_result["status"], "completed")
+        self.assertEqual(cycle_result["cycle"]["status"], "completed")
+        self.assertEqual(cycle_result["cycle"]["runner_id"], "paper-runner")
+        self.assertEqual(cycle_result["cycle"]["processed_bar_count"], 30)
+        self.assertTrue(cycle_result["cycle"]["latest_bar_at"])
+        self.assertTrue(cycle_result["cycle"]["request_id"])
+        self.assertTrue(cycle_result["cycle"]["execution_id"])
+        self.assertTrue(cycle_result["cycle"]["run_id"])
+        self.assertEqual(recent_cycles[0]["cycle_id"], cycle_result["cycle"]["cycle_id"])
+        self.assertEqual(recent_cycles[0]["status"], "completed")
+
+    def test_live_run_cycle_skips_when_market_watermark_does_not_advance(self) -> None:
+        """验证 live runner 在没有新 bar 时会显式记一次 skipped cycle。"""
+        base_dir = Path("var/test-artifacts/live-cycle-skip")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "live-cycle-skip.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 6, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(30):
+                current = start + timedelta(days=offset)
+                price += 0.8
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.5, 2),
+                        "high": round(price + 0.5, 2),
+                        "low": round(price - 0.9, 2),
+                        "close": round(price, 2),
+                        "volume": 2_100_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(
+            config_path,
+            db_path,
+            live_enabled=True,
+            live_runner_id="paper-runner",
+            live_poll_interval_seconds=0.0,
+            live_max_cycles_per_run=1,
+        )
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+
+        first = app.live_run_cycle(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        second = app.live_run_cycle(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        recent_cycles = app.recent_live_cycles(limit=5)["live_cycles"]
+        runner_summary = app.live_runner_status(limit=10)["summary"]
+
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(second["status"], "skipped")
+        self.assertEqual(second["cycle"]["skip_reason"], "no_new_data")
+        self.assertEqual(recent_cycles[0]["status"], "skipped")
+        self.assertEqual(recent_cycles[1]["status"], "completed")
+        self.assertEqual(runner_summary[0]["runner_id"], "paper-runner")
+        self.assertEqual(runner_summary[0]["latest_status"], "skipped")
+        self.assertEqual(runner_summary[0]["idle_streak"], 1)
+
+    def test_live_run_cycle_records_blocked_status_when_controller_is_protected(self) -> None:
+        """验证 live cycle 会把控制器 protection block 显式落成 blocked 周期。"""
+        base_dir = Path("var/test-artifacts/live-cycle-blocked")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "live-cycle-blocked.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 6, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(30):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.6, 2),
+                        "high": round(price + 0.5, 2),
+                        "low": round(price - 1.0, 2),
+                        "close": round(price, 2),
+                        "volume": 2_000_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(
+            config_path,
+            db_path,
+            live_enabled=True,
+            live_runner_id="paper-runner",
+            live_poll_interval_seconds=0.0,
+            live_max_cycles_per_run=1,
+            protection_mode_failure_threshold=1,
+            skip_run_on_protection_mode=True,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            first_execution = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
+            repository.mark_execution_failed(first_execution, "trigger live protection")
+
+        cycle_result = app.live_run_cycle(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        recent_cycles = app.recent_live_cycles(limit=5)["live_cycles"]
+
+        self.assertEqual(cycle_result["status"], "blocked")
+        self.assertEqual(cycle_result["cycle"]["status"], "blocked")
+        self.assertEqual(cycle_result["cycle"]["skip_reason"], "protection_mode")
+        self.assertTrue(cycle_result["cycle"]["protection_mode"])
+        self.assertEqual(recent_cycles[0]["status"], "blocked")
 
     def test_execution_enters_protection_mode_after_consecutive_failures(self) -> None:
         """验证连续失败达到阈值后，新执行记录会带上保护模式标记。"""

@@ -899,6 +899,30 @@
 | 未完成 | 更细的 failure class 动作矩阵、不同 failure class 的差异化 cooldown、live runner 重启恢复、券商对账后的保护触发 |
 | 备注 | 这一轮把控制器从“会重试、会修复”推进成了“会预判、会自检、会对高风险失败立即收手”的更成熟骨架 |
 
+### 2026-03-28 第 53 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把控制器继续往“常驻运行骨架”推进，不再只支持手动一次性回测，而是显式记录每一轮 live polling cycle |
+| 输入 | 已有 `persist_backtest_run`、request / execution / notification 链路，但系统还缺一个更外层的“runner 周期”概念，所以无法回答“这一轮为什么没跑”“是没新数据、被保护模式拦截，还是正常推进成了一次执行” |
+| 产出 | `live_runner_cycles` 表；`live-run-once` / `live-runner` / `live-cycles` / `live-cycle-detail` CLI；runner 水位判断；`no_data` / `no_new_data` / `blocked` / `completed` / `failed` 周期状态；history 页 `Recent Live Cycles` 面板；对应测试 |
+| 结果 | 现在系统除了记录 execution attempt，还会记录更外层的 live cycle：每一轮能看到 runner、最新 bar、水位是否推进、最终是否触发 persisted run，以及 request / execution / run 之间的连接关系 |
+| 为什么这么做 | 因为 execution 解决的是“任务已经决定要跑后发生了什么”，而 live runner 还需要回答“这一轮到底该不该跑”。只有把 polling cycle 这一层补出来，系统才开始像真正的常驻运行器，而不是用户手动触发的一次性脚本。 |
+| 未完成 | 后台 daemon、runner heartbeat、进程级锁、跨进程 runner 协调、外部市场时间窗口控制 |
+| 备注 | 这一轮把控制器从“会执行”推进成了“会轮询决策”的 live skeleton |
+
+### 2026-03-28 第 54 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 live runner 不只是有单条 cycle 记录，还能从值班角度直接看出“哪个 runner 现在健康、哪个 runner 正在空转、哪个 runner 被卡住了” |
+| 输入 | 已有 `Recent Live Cycles` 明细，但 operator 仍需要自己手工把多条 cycle 拼成一个 runner 的整体状态，无法一眼判断 idle streak、blocked runner、最近成功时间等更接近长期运行的问题 |
+| 产出 | `live-runner-status` CLI；`live_runner_summary` 聚合；history 摘要里的 `live_runners` / `idle_live_runners`；history 页 `Live Runners` 面板；对应测试 |
+| 结果 | 现在系统可以直接汇总出每个 `runner_id + symbol + timeframe` 的周期数、最近状态、idle streak、最近成功时间、protection 命中次数，不必再从一堆 cycle 里手动推断 |
+| 为什么这么做 | 因为长期运行系统的常见问题不是“单次 cycle 发生了什么”，而是“某个 runner 最近一直在跳过吗”“某个 runner 是不是连续被卡住了”。把 runner 聚合视图补上后，live skeleton 才真正从“能记录事件”提升成“能观察长期运行状态”。 |
+| 未完成 | runner heartbeat、失联 runner 告警、runner 级自动恢复、市场时段感知、接券商后的 live broker health |
+| 备注 | 这一轮把 live skeleton 从“有周期明细”推进成了“有 runner 级健康视图”的更完整运行骨架 |
+
 ---
 
 ## 10. 完整项目搭建观察框架

@@ -79,6 +79,42 @@ class BarRepository:
             for row in rows
         ]
 
+    def fetch_latest_bar_summary(self, symbol: str, timeframe: str = "1d") -> dict[str, object]:
+        """读取某个标的当前最新 bar 的时间和总 bar 数。
+
+        live runner 不需要每次把整段历史都拉回内存，只需要先知道：
+        - 现在有没有数据；
+        - 最新一根 bar 到了哪里；
+        - 总共有多少根 bar 可供本轮回测使用。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "bars" for table in tables):
+                return {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "latest_bar_at": "",
+                    "bar_count": 0,
+                }
+            row = connection.execute(
+                """
+                SELECT COALESCE(MAX(timestamp), '') AS latest_bar_at,
+                       COUNT(*) AS bar_count
+                FROM bars
+                WHERE symbol = ? AND timeframe = ?
+                """,
+                (symbol, timeframe),
+            ).fetchone()
+        finally:
+            connection.close()
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "latest_bar_at": str(row[0] or "") if row else "",
+            "bar_count": int(row[1]) if row else 0,
+        }
+
 
 class BacktestRunRepository:
     """负责回测运行、订单、审计日志、快照等持久化读写。"""
@@ -1608,6 +1644,203 @@ class BacktestRunRepository:
         summaries.sort(key=lambda item: str(item.get("last_updated_at", "")), reverse=True)
         return summaries[:limit]
 
+    @staticmethod
+    def _live_cycle_row_to_dict(row: object) -> dict[str, object]:
+        """把 live cycle 查询结果统一转换成字典。"""
+        return {
+            "cycle_id": row[0],
+            "runner_id": row[1],
+            "symbol": row[2],
+            "timeframe": row[3],
+            "initial_equity": row[4],
+            "status": row[5],
+            "started_at": row[6],
+            "finished_at": row[7],
+            "latest_bar_at": row[8],
+            "processed_bar_count": row[9],
+            "request_id": row[10],
+            "execution_id": row[11],
+            "run_id": row[12],
+            "skip_reason": row[13],
+            "error_message": row[14],
+            "protection_mode": bool(row[15]),
+            "cycle_note": row[16],
+        }
+
+    def create_live_cycle(
+        self,
+        *,
+        runner_id: str,
+        symbol: str,
+        timeframe: str,
+        initial_equity: float,
+        latest_bar_at: str,
+        processed_bar_count: int,
+    ) -> str:
+        """创建一条新的 live runner 周期记录。"""
+        connection = connect_database(self.db_path)
+        cycle_id = str(uuid4())
+        started_at = datetime.now(UTC).isoformat()
+        try:
+            connection.execute(
+                """
+                INSERT INTO live_runner_cycles (
+                    cycle_id, runner_id, symbol, timeframe, initial_equity, status, started_at,
+                    finished_at, latest_bar_at, processed_bar_count, request_id, execution_id, run_id,
+                    skip_reason, error_message, protection_mode, cycle_note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cycle_id,
+                    runner_id[:120],
+                    symbol[:32],
+                    timeframe[:20],
+                    initial_equity,
+                    "running",
+                    started_at,
+                    "",
+                    latest_bar_at[:40],
+                    max(int(processed_bar_count), 0),
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    0,
+                    "",
+                ),
+            )
+            return cycle_id
+        finally:
+            connection.close()
+
+    def finish_live_cycle(
+        self,
+        *,
+        cycle_id: str,
+        status: str,
+        latest_bar_at: str = "",
+        processed_bar_count: int = 0,
+        request_id: str = "",
+        execution_id: str = "",
+        run_id: str = "",
+        skip_reason: str = "",
+        error_message: str = "",
+        protection_mode: bool = False,
+        cycle_note: str = "",
+    ) -> None:
+        """把 live cycle 从 running 更新成最终状态。"""
+        connection = connect_database(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE live_runner_cycles
+                SET status = ?,
+                    finished_at = ?,
+                    latest_bar_at = ?,
+                    processed_bar_count = ?,
+                    request_id = ?,
+                    execution_id = ?,
+                    run_id = ?,
+                    skip_reason = ?,
+                    error_message = ?,
+                    protection_mode = ?,
+                    cycle_note = ?
+                WHERE cycle_id = ?
+                """,
+                (
+                    status[:40],
+                    datetime.now(UTC).isoformat(),
+                    latest_bar_at[:40],
+                    max(int(processed_bar_count), 0),
+                    request_id[:80],
+                    execution_id[:80],
+                    run_id[:80],
+                    skip_reason[:200],
+                    error_message[:500],
+                    1 if protection_mode else 0,
+                    cycle_note[:500],
+                    cycle_id[:80],
+                ),
+            )
+        finally:
+            connection.close()
+
+    def fetch_recent_live_cycles(self, limit: int = 20) -> list[dict[str, object]]:
+        """查询最近的 live runner 周期记录。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "live_runner_cycles" for table in tables):
+                return []
+            rows = connection.execute(
+                """
+                SELECT cycle_id, runner_id, symbol, timeframe, initial_equity, status, started_at,
+                       finished_at, latest_bar_at, processed_bar_count, request_id, execution_id, run_id,
+                       skip_reason, error_message, protection_mode, cycle_note
+                FROM live_runner_cycles
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._live_cycle_row_to_dict(row) for row in rows]
+
+    def fetch_live_cycle_detail(self, cycle_id: str) -> dict[str, object] | None:
+        """查询单个 live cycle 的完整详情。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "live_runner_cycles" for table in tables):
+                return None
+            row = connection.execute(
+                """
+                SELECT cycle_id, runner_id, symbol, timeframe, initial_equity, status, started_at,
+                       finished_at, latest_bar_at, processed_bar_count, request_id, execution_id, run_id,
+                       skip_reason, error_message, protection_mode, cycle_note
+                FROM live_runner_cycles
+                WHERE cycle_id = ?
+                """,
+                (cycle_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return None
+        return self._live_cycle_row_to_dict(row)
+
+    def fetch_latest_live_cycle_watermark(self, *, runner_id: str, symbol: str, timeframe: str) -> dict[str, object] | None:
+        """读取某个 runner 最近一次已结束周期的数据水位。
+
+        这里的“水位”指上一轮看到的最新 bar 时间。只要当前最新 bar
+        还停留在同一个时间点，本轮 live cycle 就没有必要重复触发完整运行。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "live_runner_cycles" for table in tables):
+                return None
+            row = connection.execute(
+                """
+                SELECT cycle_id, runner_id, symbol, timeframe, initial_equity, status, started_at,
+                       finished_at, latest_bar_at, processed_bar_count, request_id, execution_id, run_id,
+                       skip_reason, error_message, protection_mode, cycle_note
+                FROM live_runner_cycles
+                WHERE runner_id = ? AND symbol = ? AND timeframe = ?
+                  AND status != 'running'
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (runner_id, symbol, timeframe),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return None
+        return self._live_cycle_row_to_dict(row)
+
     def fetch_protection_status(self, symbol: str, timeframe: str) -> dict[str, object]:
         """查询某个标的/周期当前的保护模式状态，而不需要触发新的回测。"""
         connection = connect_database(self.db_path)
@@ -1940,7 +2173,7 @@ class BacktestRunRepository:
         ]
 
     def fetch_history_bundle(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, list[dict[str, object]]]:
-        """一次性取回历史页面需要的 runs / executions / orders / audit / notifications 五组数据。
+        """一次性取回历史页面需要的 runs / executions / live cycles / orders / audit / notifications 六组数据。
 
         之所以把 execution 单独带出来，是因为“运行有没有成功”与“订单后来发生了什么”
         属于两个不同层级的问题。历史页需要同时看到这两层，排错才完整。
@@ -1951,6 +2184,7 @@ class BacktestRunRepository:
             table_names = {table[0] for table in tables}
             runs: list[dict[str, object]] = []
             executions: list[dict[str, object]] = []
+            live_cycles: list[dict[str, object]] = []
             orders: list[dict[str, object]] = []
             audit_events: list[dict[str, object]] = []
             notification_events: list[dict[str, object]] = []
@@ -1995,6 +2229,20 @@ class BacktestRunRepository:
                     (events_limit,),
                 ).fetchall()
                 executions = [self._execution_row_to_dict(row) for row in execution_rows]
+
+            if "live_runner_cycles" in table_names:
+                live_cycle_rows = connection.execute(
+                    """
+                    SELECT cycle_id, runner_id, symbol, timeframe, initial_equity, status, started_at,
+                           finished_at, latest_bar_at, processed_bar_count, request_id, execution_id, run_id,
+                           skip_reason, error_message, protection_mode, cycle_note
+                    FROM live_runner_cycles
+                    ORDER BY started_at DESC
+                    LIMIT ?
+                    """,
+                    (events_limit,),
+                ).fetchall()
+                live_cycles = [self._live_cycle_row_to_dict(row) for row in live_cycle_rows]
 
             if "order_events" in table_names:
                 order_rows = connection.execute(
@@ -2111,6 +2359,7 @@ class BacktestRunRepository:
         return {
             "runs": runs,
             "executions": executions,
+            "live_cycles": live_cycles,
             "orders": orders,
             "audit_events": audit_events,
             "notification_events": notification_events,
