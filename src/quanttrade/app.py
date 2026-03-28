@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -19,6 +21,7 @@ from quanttrade.audit.logger import configure_logging
 from quanttrade.backtest.engine import BacktestEngine
 from quanttrade.backtest.exporter import export_backtest_result
 from quanttrade.config.loader import load_settings
+from quanttrade.core.exceptions import NonRetryableExecutionError, RetryableExecutionError
 from quanttrade.core.types import AccountState, MarketBar, PositionState
 from quanttrade.dashboard.service import build_dashboard_payload, build_history_payload
 from quanttrade.dashboard.html import render_dashboard_html, render_history_html
@@ -29,6 +32,8 @@ from quanttrade.data.storage import database_lock, ensure_data_dirs, execution_l
 from quanttrade.execution.simulator import SimulatedExecutionEngine
 from quanttrade.risk.engine import RiskEngine
 from quanttrade.strategies.atr_dtf import AtrDynamicTrendFollowingStrategy
+
+LOGGER = logging.getLogger(__name__)
 
 
 class QuantTradeApp:
@@ -118,6 +123,32 @@ class QuantTradeApp:
         result = engine.run_series(bars=bars, initial_equity=initial_equity)
         return asdict(result)
 
+    def _classify_execution_error(self, exc: Exception) -> dict[str, object]:
+        """把一次执行异常翻译成运行控制器可理解的决策信息。
+
+        这一步很关键，因为运行控制器真正需要的不是“异常字符串”，而是：
+        1. 这类错误是否值得再试；
+        2. 如果不再试，是因为输入有问题，还是因为系统主动阻断；
+        3. 日志和持久化里应该如何描述这次判断。
+        """
+        if isinstance(exc, RetryableExecutionError):
+            return {
+                "retryable": True,
+                "failure_class": exc.__class__.__name__,
+                "log_reason": str(exc),
+            }
+        if isinstance(exc, NonRetryableExecutionError):
+            return {
+                "retryable": False,
+                "failure_class": exc.__class__.__name__,
+                "log_reason": str(exc),
+            }
+        return {
+            "retryable": False,
+            "failure_class": exc.__class__.__name__,
+            "log_reason": str(exc),
+        }
+
     def persist_backtest_run(
         self,
         symbol: str,
@@ -131,6 +162,7 @@ class QuantTradeApp:
         2. backtest_executions：记录这次运行是开始了、完成了、失败了还是中断恢复了。
         """
         max_retry_attempts = max(int(self.settings.execution.max_retry_attempts), 1)
+        retry_backoff_seconds = max(float(self.settings.execution.retry_backoff_seconds), 0.0)
         protection_threshold = max(int(self.settings.execution.protection_mode_failure_threshold), 1)
         skip_run_on_protection_mode = bool(self.settings.execution.skip_run_on_protection_mode)
         request_id = str(uuid4())
@@ -143,6 +175,14 @@ class QuantTradeApp:
         with execution_lock(self.settings.data.duckdb_path, symbol=symbol, timeframe=timeframe, blocking=False):
             for _ in range(max_retry_attempts):
                 attempts_used += 1
+                LOGGER.info(
+                    "starting persisted backtest request_id=%s symbol=%s timeframe=%s attempt=%s/%s",
+                    request_id,
+                    symbol,
+                    timeframe,
+                    attempts_used,
+                    max_retry_attempts,
+                )
                 with database_lock(self.settings.data.duckdb_path):
                     create_schema(self.settings.data.duckdb_path)
                     repository = BacktestRunRepository(self.settings.data.duckdb_path)
@@ -160,6 +200,12 @@ class QuantTradeApp:
 
                 execution = execution_detail["execution"] if execution_detail else {}
                 if execution.get("protection_mode") and skip_run_on_protection_mode:
+                    LOGGER.warning(
+                        "blocking backtest request_id=%s execution_id=%s because protection mode is active: %s",
+                        request_id,
+                        execution_id,
+                        execution.get("protection_reason", ""),
+                    )
                     with database_lock(self.settings.data.duckdb_path):
                         repository = BacktestRunRepository(self.settings.data.duckdb_path)
                         repository.mark_execution_blocked(
@@ -199,13 +245,52 @@ class QuantTradeApp:
                         repository = BacktestRunRepository(self.settings.data.duckdb_path)
                         run_id = repository.save_run(symbol=symbol, timeframe=timeframe, payload=payload)
                         repository.mark_execution_completed(execution_id=execution_id, run_id=run_id)
+                    LOGGER.info(
+                        "completed persisted backtest request_id=%s execution_id=%s run_id=%s attempt=%s",
+                        request_id,
+                        execution_id,
+                        run_id,
+                        attempts_used,
+                    )
                     break
                 except Exception as exc:
-                    last_error = str(exc)
+                    error_meta = self._classify_execution_error(exc)
+                    last_error = str(error_meta["log_reason"])
+                    retryable = bool(error_meta["retryable"])
+                    retry_decision = "retry_scheduled" if retryable and attempts_used < max_retry_attempts else "final_failure"
                     with database_lock(self.settings.data.duckdb_path):
                         repository = BacktestRunRepository(self.settings.data.duckdb_path)
-                        repository.mark_execution_failed(execution_id=execution_id, error_message=last_error)
-                    if attempts_used >= max_retry_attempts:
+                        repository.mark_execution_failed(
+                            execution_id=execution_id,
+                            error_message=last_error,
+                            retryable=retryable,
+                            retry_decision=retry_decision,
+                            failure_class=str(error_meta["failure_class"]),
+                        )
+                    if retry_decision == "retry_scheduled":
+                        LOGGER.warning(
+                            "retrying persisted backtest request_id=%s execution_id=%s after retryable failure class=%s attempt=%s/%s reason=%s",
+                            request_id,
+                            execution_id,
+                            error_meta["failure_class"],
+                            attempts_used,
+                            max_retry_attempts,
+                            last_error,
+                        )
+                        if retry_backoff_seconds > 0:
+                            # 简单线性退避：越往后重试，等待越久，避免连续立刻撞到同一类瞬时问题。
+                            time.sleep(retry_backoff_seconds * attempts_used)
+                        continue
+                    LOGGER.error(
+                        "stopping persisted backtest request_id=%s execution_id=%s after non-retryable or final failure class=%s attempt=%s/%s reason=%s",
+                        request_id,
+                        execution_id,
+                        error_meta["failure_class"],
+                        attempts_used,
+                        max_retry_attempts,
+                        last_error,
+                    )
+                    if attempts_used >= max_retry_attempts or not retryable:
                         raise
             else:
                 raise RuntimeError(last_error or "backtest execution failed without explicit error")
@@ -316,7 +401,17 @@ class QuantTradeApp:
     ) -> dict[str, object]:
         """生成单次回测的 dashboard 数据快照。"""
         backtest_payload = self.backtest_symbol(symbol=symbol, timeframe=timeframe, initial_equity=initial_equity)
-        return build_dashboard_payload(backtest_payload)
+        return build_dashboard_payload(
+            backtest_payload,
+            symbol=symbol,
+            timeframe=timeframe,
+            initial_equity=initial_equity,
+            settings={
+                "strategy": asdict(self.settings.strategy),
+                "risk": asdict(self.settings.risk),
+                "execution": asdict(self.settings.execution),
+            },
+        )
 
     def export_dashboard_snapshot(
         self,

@@ -109,6 +109,94 @@ class BacktestRunRepository:
                 count += 1
         return count
 
+    @staticmethod
+    def _execution_select_clause(connection: object) -> str:
+        """根据数据库当前实际列，构造兼容新旧版本的 execution 查询字段。
+
+        这里不能简单写死 `SELECT retryable, retry_decision ...`，
+        因为旧库可能还没迁移到这些字段。最稳妥的做法是：
+        - 如果列存在，就读真实值；
+        - 如果列不存在，就返回带别名的默认值。
+        """
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info('backtest_executions')").fetchall()
+        }
+        select_map = {
+            "execution_id": "execution_id",
+            "request_id": "request_id" if "request_id" in columns else "'' AS request_id",
+            "symbol": "symbol",
+            "timeframe": "timeframe",
+            "initial_equity": "initial_equity",
+            "attempt_number": "attempt_number" if "attempt_number" in columns else "1 AS attempt_number",
+            "recovered_execution_count": (
+                "recovered_execution_count" if "recovered_execution_count" in columns else "0 AS recovered_execution_count"
+            ),
+            "consecutive_failures_before_start": (
+                "consecutive_failures_before_start"
+                if "consecutive_failures_before_start" in columns
+                else "0 AS consecutive_failures_before_start"
+            ),
+            "protection_mode": "protection_mode" if "protection_mode" in columns else "0 AS protection_mode",
+            "protection_reason": "protection_reason" if "protection_reason" in columns else "'' AS protection_reason",
+            "retryable": "retryable" if "retryable" in columns else "0 AS retryable",
+            "retry_decision": "retry_decision" if "retry_decision" in columns else "'' AS retry_decision",
+            "failure_class": "failure_class" if "failure_class" in columns else "'' AS failure_class",
+            "status": "status",
+            "requested_at": "requested_at",
+            "started_at": "started_at",
+            "finished_at": "finished_at",
+            "run_id": "run_id",
+            "error_message": "error_message",
+        }
+        ordered_keys = [
+            "execution_id",
+            "request_id",
+            "symbol",
+            "timeframe",
+            "initial_equity",
+            "attempt_number",
+            "recovered_execution_count",
+            "consecutive_failures_before_start",
+            "protection_mode",
+            "protection_reason",
+            "retryable",
+            "retry_decision",
+            "failure_class",
+            "status",
+            "requested_at",
+            "started_at",
+            "finished_at",
+            "run_id",
+            "error_message",
+        ]
+        return ", ".join(select_map[key] for key in ordered_keys)
+
+    @staticmethod
+    def _execution_row_to_dict(row: object) -> dict[str, object]:
+        """把统一顺序的 execution 查询结果转换成字典。"""
+        return {
+            "execution_id": row[0],
+            "request_id": row[1],
+            "symbol": row[2],
+            "timeframe": row[3],
+            "initial_equity": row[4],
+            "attempt_number": row[5],
+            "recovered_execution_count": row[6],
+            "consecutive_failures_before_start": row[7],
+            "protection_mode": bool(row[8]),
+            "protection_reason": row[9],
+            "retryable": bool(row[10]),
+            "retry_decision": row[11],
+            "failure_class": row[12],
+            "status": row[13],
+            "requested_at": row[14],
+            "started_at": row[15],
+            "finished_at": row[16],
+            "run_id": row[17],
+            "error_message": row[18],
+        }
+
     def create_execution(
         self,
         request_id: str,
@@ -182,15 +270,24 @@ class BacktestRunRepository:
             connection.execute(
                 """
                 UPDATE backtest_executions
-                SET status = ?, finished_at = ?, run_id = ?, error_message = ''
+                SET status = ?, finished_at = ?, run_id = ?, error_message = '',
+                    retryable = 0, retry_decision = ?, failure_class = ''
                 WHERE execution_id = ?
                 """,
-                ("completed", finished_at, run_id, execution_id),
+                ("completed", finished_at, run_id, "completed", execution_id),
             )
         finally:
             connection.close()
 
-    def mark_execution_failed(self, execution_id: str, error_message: str, status: str = "failed") -> None:
+    def mark_execution_failed(
+        self,
+        execution_id: str,
+        error_message: str,
+        status: str = "failed",
+        retryable: bool = False,
+        retry_decision: str = "final_failure",
+        failure_class: str = "",
+    ) -> None:
         """把执行记录标记为失败或其它异常结束状态。"""
         connection = connect_database(self.db_path)
         finished_at = datetime.now(UTC).isoformat()
@@ -198,10 +295,19 @@ class BacktestRunRepository:
             connection.execute(
                 """
                 UPDATE backtest_executions
-                SET status = ?, finished_at = ?, error_message = ?
+                SET status = ?, finished_at = ?, error_message = ?,
+                    retryable = ?, retry_decision = ?, failure_class = ?
                 WHERE execution_id = ?
                 """,
-                (status, finished_at, error_message[:500], execution_id),
+                (
+                    status,
+                    finished_at,
+                    error_message[:500],
+                    1 if retryable else 0,
+                    retry_decision,
+                    failure_class[:120],
+                    execution_id,
+                ),
             )
         finally:
             connection.close()
@@ -212,7 +318,14 @@ class BacktestRunRepository:
         单独保留这个语义化方法，是为了避免调用方到处手写 `status="blocked"`，
         让“失败”和“主动拦截”这两种不同结束原因更清楚。
         """
-        self.mark_execution_failed(execution_id=execution_id, error_message=reason, status="blocked")
+        self.mark_execution_failed(
+            execution_id=execution_id,
+            error_message=reason,
+            status="blocked",
+            retryable=False,
+            retry_decision="blocked_protection_mode",
+            failure_class="ProtectionMode",
+        )
 
     def recover_stale_executions(self, symbol: str, timeframe: str) -> int:
         """把异常中断后残留的 running 记录修正为 abandoned。"""
@@ -403,12 +516,10 @@ class BacktestRunRepository:
             tables = connection.execute("SHOW TABLES").fetchall()
             if not any(table[0] == "backtest_executions" for table in tables):
                 return []
+            select_clause = self._execution_select_clause(connection)
             rows = connection.execute(
-                """
-                SELECT execution_id, request_id, symbol, timeframe, initial_equity, attempt_number,
-                       recovered_execution_count, consecutive_failures_before_start,
-                       protection_mode, protection_reason, status,
-                       requested_at, started_at, finished_at, run_id, error_message
+                f"""
+                SELECT {select_clause}
                 FROM backtest_executions
                 ORDER BY started_at DESC
                 LIMIT ?
@@ -417,27 +528,7 @@ class BacktestRunRepository:
             ).fetchall()
         finally:
             connection.close()
-        return [
-            {
-                "execution_id": row[0],
-                "request_id": row[1],
-                "symbol": row[2],
-                "timeframe": row[3],
-                "initial_equity": row[4],
-                "attempt_number": row[5],
-                "recovered_execution_count": row[6],
-                "consecutive_failures_before_start": row[7],
-                "protection_mode": bool(row[8]),
-                "protection_reason": row[9],
-                "status": row[10],
-                "requested_at": row[11],
-                "started_at": row[12],
-                "finished_at": row[13],
-                "run_id": row[14],
-                "error_message": row[15],
-            }
-            for row in rows
-        ]
+        return [self._execution_row_to_dict(row) for row in rows]
 
     def fetch_execution_detail(self, execution_id: str) -> dict[str, object] | None:
         """查询某一次执行尝试的完整详情。
@@ -452,12 +543,10 @@ class BacktestRunRepository:
             table_names = {table[0] for table in tables}
             if "backtest_executions" not in table_names:
                 return None
+            select_clause = self._execution_select_clause(connection)
             execution_row = connection.execute(
-                """
-                SELECT execution_id, request_id, symbol, timeframe, initial_equity, attempt_number,
-                       recovered_execution_count, consecutive_failures_before_start,
-                       protection_mode, protection_reason, status,
-                       requested_at, started_at, finished_at, run_id, error_message
+                f"""
+                SELECT {select_clause}
                 FROM backtest_executions
                 WHERE execution_id = ?
                 """,
@@ -466,7 +555,7 @@ class BacktestRunRepository:
             if execution_row is None:
                 return None
             run_row = None
-            run_id = execution_row[14]
+            run_id = execution_row[17]
             if run_id and "backtest_runs" in table_names:
                 run_row = connection.execute(
                     """
@@ -481,24 +570,7 @@ class BacktestRunRepository:
             connection.close()
 
         return {
-            "execution": {
-                "execution_id": execution_row[0],
-                "request_id": execution_row[1],
-                "symbol": execution_row[2],
-                "timeframe": execution_row[3],
-                "initial_equity": execution_row[4],
-                "attempt_number": execution_row[5],
-                "recovered_execution_count": execution_row[6],
-                "consecutive_failures_before_start": execution_row[7],
-                "protection_mode": bool(execution_row[8]),
-                "protection_reason": execution_row[9],
-                "status": execution_row[10],
-                "requested_at": execution_row[11],
-                "started_at": execution_row[12],
-                "finished_at": execution_row[13],
-                "run_id": execution_row[14],
-                "error_message": execution_row[15],
-            },
+            "execution": self._execution_row_to_dict(execution_row),
             "run": {
                 "run_id": run_row[0],
                 "symbol": run_row[1],
@@ -528,12 +600,10 @@ class BacktestRunRepository:
             table_names = {table[0] for table in tables}
             if "backtest_executions" not in table_names:
                 return None
+            select_clause = self._execution_select_clause(connection)
             rows = connection.execute(
-                """
-                SELECT execution_id, request_id, symbol, timeframe, initial_equity, attempt_number,
-                       recovered_execution_count, consecutive_failures_before_start,
-                       protection_mode, protection_reason, status,
-                       requested_at, started_at, finished_at, run_id, error_message
+                f"""
+                SELECT {select_clause}
                 FROM backtest_executions
                 WHERE request_id = ?
                 ORDER BY started_at
@@ -545,27 +615,7 @@ class BacktestRunRepository:
         finally:
             connection.close()
 
-        attempts = [
-            {
-                "execution_id": row[0],
-                "request_id": row[1],
-                "symbol": row[2],
-                "timeframe": row[3],
-                "initial_equity": row[4],
-                "attempt_number": row[5],
-                "recovered_execution_count": row[6],
-                "consecutive_failures_before_start": row[7],
-                "protection_mode": bool(row[8]),
-                "protection_reason": row[9],
-                "status": row[10],
-                "requested_at": row[11],
-                "started_at": row[12],
-                "finished_at": row[13],
-                "run_id": row[14],
-                "error_message": row[15],
-            }
-            for row in rows
-        ]
+        attempts = [self._execution_row_to_dict(row) for row in rows]
         latest = attempts[-1]
         return {
             "request": {
@@ -592,12 +642,10 @@ class BacktestRunRepository:
             tables = connection.execute("SHOW TABLES").fetchall()
             if not any(table[0] == "backtest_executions" for table in tables):
                 return []
+            select_clause = self._execution_select_clause(connection)
             rows = connection.execute(
-                """
-                SELECT execution_id, request_id, symbol, timeframe, initial_equity, attempt_number,
-                       recovered_execution_count, consecutive_failures_before_start,
-                       protection_mode, protection_reason, status,
-                       requested_at, started_at, finished_at, run_id, error_message
+                f"""
+                SELECT {select_clause}
                 FROM backtest_executions
                 WHERE request_id != ''
                 ORDER BY started_at DESC
@@ -608,27 +656,9 @@ class BacktestRunRepository:
 
         grouped: dict[str, list[dict[str, object]]] = {}
         for row in rows:
-            request_id = str(row[1])
-            grouped.setdefault(request_id, []).append(
-                {
-                    "execution_id": row[0],
-                    "request_id": row[1],
-                    "symbol": row[2],
-                    "timeframe": row[3],
-                    "initial_equity": row[4],
-                    "attempt_number": row[5],
-                    "recovered_execution_count": row[6],
-                    "consecutive_failures_before_start": row[7],
-                    "protection_mode": bool(row[8]),
-                    "protection_reason": row[9],
-                    "status": row[10],
-                    "requested_at": row[11],
-                    "started_at": row[12],
-                    "finished_at": row[13],
-                    "run_id": row[14],
-                    "error_message": row[15],
-                }
-            )
+            execution = self._execution_row_to_dict(row)
+            request_id = str(execution["request_id"])
+            grouped.setdefault(request_id, []).append(execution)
 
         summaries: list[dict[str, object]] = []
         for request_id, attempts in grouped.items():
@@ -958,39 +988,17 @@ class BacktestRunRepository:
                 ]
 
             if "backtest_executions" in table_names:
+                select_clause = self._execution_select_clause(connection)
                 execution_rows = connection.execute(
-                    """
-                    SELECT execution_id, request_id, symbol, timeframe, initial_equity, attempt_number,
-                           recovered_execution_count, consecutive_failures_before_start,
-                           protection_mode, protection_reason, status,
-                           requested_at, started_at, finished_at, run_id, error_message
+                    f"""
+                    SELECT {select_clause}
                     FROM backtest_executions
                     ORDER BY started_at DESC
                     LIMIT ?
                     """,
                     (events_limit,),
                 ).fetchall()
-                executions = [
-                    {
-                        "execution_id": row[0],
-                        "request_id": row[1],
-                        "symbol": row[2],
-                        "timeframe": row[3],
-                        "initial_equity": row[4],
-                        "attempt_number": row[5],
-                        "recovered_execution_count": row[6],
-                        "consecutive_failures_before_start": row[7],
-                        "protection_mode": bool(row[8]),
-                        "protection_reason": row[9],
-                        "status": row[10],
-                        "requested_at": row[11],
-                        "started_at": row[12],
-                        "finished_at": row[13],
-                        "run_id": row[14],
-                        "error_message": row[15],
-                    }
-                    for row in execution_rows
-                ]
+                executions = [self._execution_row_to_dict(row) for row in execution_rows]
 
             if "order_events" in table_names:
                 order_rows = connection.execute(

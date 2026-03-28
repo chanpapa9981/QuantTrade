@@ -6,6 +6,71 @@
 from __future__ import annotations
 
 
+def _format_config_sections(
+    settings: dict[str, dict[str, object]],
+    symbol: str,
+    timeframe: str,
+    initial_equity: float,
+) -> list[dict[str, object]]:
+    """把配置拆成页面上更容易阅读的参数面板结构。"""
+    strategy = settings.get("strategy", {})
+    risk = settings.get("risk", {})
+    execution = settings.get("execution", {})
+    return [
+        {
+            "id": "market-context",
+            "title": "Market Context",
+            "items": [
+                {"label": "symbol", "value": symbol},
+                {"label": "timeframe", "value": timeframe},
+                {"label": "initial_equity", "value": initial_equity},
+                {"label": "strategy_name", "value": strategy.get("name", "")},
+            ],
+        },
+        {
+            "id": "strategy",
+            "title": "Strategy Parameters",
+            "items": [
+                {"label": "entry_donchian_n", "value": strategy.get("entry_donchian_n", 0)},
+                {"label": "exit_donchian_m", "value": strategy.get("exit_donchian_m", 0)},
+                {"label": "atr_smooth_period", "value": strategy.get("atr_smooth_period", 0)},
+                {"label": "risk_coefficient_k", "value": strategy.get("risk_coefficient_k", 0.0)},
+                {"label": "adx_trend_filter", "value": strategy.get("adx_trend_filter", 0.0)},
+                {"label": "risk_pct", "value": strategy.get("risk_pct", 0.0)},
+                {"label": "max_symbol_weight", "value": strategy.get("max_symbol_weight", 0.0)},
+            ],
+        },
+        {
+            "id": "risk",
+            "title": "Risk Controls",
+            "items": [
+                {"label": "max_daily_drawdown", "value": risk.get("max_daily_drawdown", 0.0)},
+                {"label": "global_max_exposure", "value": risk.get("global_max_exposure", 0.0)},
+                {"label": "max_open_positions", "value": risk.get("max_open_positions", 0)},
+                {"label": "slippage_tolerance", "value": risk.get("slippage_tolerance", 0.0)},
+                {"label": "liquidity_filter", "value": risk.get("liquidity_filter", 0.0)},
+            ],
+        },
+        {
+            "id": "execution",
+            "title": "Execution Controls",
+            "items": [
+                {"label": "commission_per_order", "value": execution.get("commission_per_order", 0.0)},
+                {"label": "commission_per_share", "value": execution.get("commission_per_share", 0.0)},
+                {"label": "min_commission", "value": execution.get("min_commission", 0.0)},
+                {"label": "simulated_slippage_bps", "value": execution.get("simulated_slippage_bps", 0.0)},
+                {"label": "max_fill_ratio_per_bar", "value": execution.get("max_fill_ratio_per_bar", 0.0)},
+                {"label": "open_order_timeout_bars", "value": execution.get("open_order_timeout_bars", 0)},
+                {"label": "max_retry_attempts", "value": execution.get("max_retry_attempts", 0)},
+                {
+                    "label": "skip_run_on_protection_mode",
+                    "value": execution.get("skip_run_on_protection_mode", False),
+                },
+            ],
+        },
+    ]
+
+
 def _build_order_lifecycles(orders: list[dict[str, object]]) -> list[dict[str, object]]:
     """把订单事件按 `order_id` 归并成历史页使用的生命周期摘要。"""
     grouped: dict[str, list[dict[str, object]]] = {}
@@ -79,6 +144,7 @@ def _build_execution_requests(executions: list[dict[str, object]]) -> list[dict[
                 "timeframe": last.get("timeframe", ""),
                 "attempt_count": len(ordered),
                 "attempt_path": " -> ".join(str(item.get("status", "")) for item in ordered),
+                "decision_path": " -> ".join(str(item.get("retry_decision", "")) for item in ordered if item.get("retry_decision")),
                 "final_status": last.get("status", ""),
                 "latest_execution_id": last.get("execution_id", ""),
                 "run_id": last.get("run_id", ""),
@@ -106,7 +172,14 @@ def _build_execution_request_details(executions: list[dict[str, object]]) -> dic
     return grouped
 
 
-def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, object]:
+def build_dashboard_payload(
+    backtest_result: dict[str, object],
+    *,
+    symbol: str,
+    timeframe: str,
+    initial_equity: float,
+    settings: dict[str, dict[str, object]],
+) -> dict[str, object]:
     """把单次回测结果整理成 dashboard 页面使用的数据格式。"""
     metrics = backtest_result["metrics"]
     trades = backtest_result["trades"]
@@ -118,8 +191,24 @@ def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, obj
 
     latest_equity = equity_curve[-1]["equity"] if equity_curve else account["equity"]
     latest_drawdown = drawdown_curve[-1]["drawdown_pct"] if drawdown_curve else 0.0
+    first_bar_at = equity_curve[0]["timestamp"] if equity_curve else ""
+    last_bar_at = equity_curve[-1]["timestamp"] if equity_curve else ""
+    drawdown_values = [float(item.get("drawdown_pct", 0.0)) for item in drawdown_curve]
+    equity_values = [float(item.get("equity", 0.0)) for item in equity_curve]
+    audit_blocked = len([event for event in audit_log if not bool(event.get("risk_allowed"))])
+    audit_order_events = len([event for event in audit_log if str(event.get("event", "")).startswith("order_")])
 
     return {
+        "run_context": {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "strategy_name": settings.get("strategy", {}).get("name", ""),
+            "bars_processed": backtest_result["bars_processed"],
+            "initial_equity": initial_equity,
+            "ending_equity": latest_equity,
+            "first_bar_at": first_bar_at,
+            "last_bar_at": last_bar_at,
+        },
         # summary_cards 是顶部卡片的直接输入，前端不需要再额外拼装。
         "summary_cards": [
             {"id": "ending_equity", "label": "Ending Equity", "value": latest_equity},
@@ -143,6 +232,15 @@ def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, obj
             "equity_curve": equity_curve,
             "drawdown_curve": drawdown_curve,
         },
+        "chart_summary": {
+            "bars_processed": backtest_result["bars_processed"],
+            "first_bar_at": first_bar_at,
+            "last_bar_at": last_bar_at,
+            "equity_peak": max(equity_values) if equity_values else latest_equity,
+            "equity_floor": min(equity_values) if equity_values else latest_equity,
+            "deepest_drawdown_pct": max(drawdown_values) if drawdown_values else 0.0,
+            "ending_drawdown_pct": latest_drawdown,
+        },
         "order_summary": {
             "total_orders": len(orders),
             "open_orders": len([item for item in orders if item["status"] == "open"]),
@@ -153,6 +251,16 @@ def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, obj
             "rejected_orders": len([item for item in orders if item["status"] == "rejected"]),
             "skipped_orders": len([item for item in orders if item["status"] == "skipped"]),
         },
+        "audit_summary": {
+            "total_events": len(audit_log),
+            "risk_blocked_events": audit_blocked,
+            "order_events": audit_order_events,
+            "signals_evaluated": len([item for item in audit_log if item.get("event") == "signal_evaluated"]),
+            "order_created_events": len([item for item in audit_log if item.get("event") == "order_created"]),
+            "replaced_events": len([item for item in audit_log if item.get("event") == "order_replaced"]),
+            "cancelled_events": len([item for item in audit_log if item.get("event") == "order_cancelled"]),
+        },
+        "config_sections": _format_config_sections(settings, symbol=symbol, timeframe=timeframe, initial_equity=initial_equity),
         "recent_trades": trades[-10:],
         "recent_orders": orders[-10:],
         "audit_timeline": audit_log[-20:],
@@ -177,6 +285,7 @@ def build_history_payload(
             "total_executions": len(executions),
             "total_execution_requests": len(execution_requests),
             "retried_execution_requests": len([item for item in execution_requests if item.get("retried")]),
+            "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),
             "running_executions": len([item for item in executions if item.get("status") == "running"]),

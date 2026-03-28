@@ -26,13 +26,14 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       --bg: #09111f;
       --panel: #101b2e;
       --panel-alt: #13233b;
-      --line: #27486f;
+      --panel-alt-2: #162945;
+      --line: rgba(255, 255, 255, 0.08);
       --text: #e8f0ff;
       --muted: #8ea5c6;
       --accent: #4fb3ff;
       --accent-2: #8ce99a;
       --warn: #ffb65c;
-      --danger: #ff6b6b;
+      --danger: #ff7b7b;
       --shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
     }}
 
@@ -55,8 +56,8 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
 
     .hero {{
       display: grid;
-      gap: 14px;
-      margin-bottom: 28px;
+      gap: 16px;
+      margin-bottom: 24px;
     }}
 
     .eyebrow {{
@@ -74,22 +75,43 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
     }}
 
     .subcopy {{
-      max-width: 720px;
+      max-width: 760px;
       color: var(--muted);
       font-size: 16px;
       line-height: 1.6;
+    }}
+
+    .context-strip {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }}
+
+    .context-chip {{
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--line);
+      color: var(--text);
+      font-size: 13px;
+    }}
+
+    .context-chip strong {{
+      color: var(--accent);
+      font-weight: 600;
+      margin-right: 6px;
     }}
 
     .card-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 14px;
-      margin-bottom: 28px;
+      margin-bottom: 24px;
     }}
 
     .card, .panel {{
       background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00)), var(--panel);
-      border: 1px solid rgba(255,255,255,0.06);
+      border: 1px solid var(--line);
       border-radius: 20px;
       box-shadow: var(--shadow);
     }}
@@ -113,7 +135,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
 
     .layout {{
       display: grid;
-      grid-template-columns: 1.5fr 1fr;
+      grid-template-columns: 1.55fr 1fr;
       gap: 16px;
     }}
 
@@ -152,11 +174,15 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       gap: 12px;
     }}
 
+    .stats-grid.compact .stat dd {{
+      font-size: 18px;
+    }}
+
     .stat {{
       padding: 14px;
       border-radius: 16px;
       background: var(--panel-alt);
-      border: 1px solid rgba(255,255,255,0.05);
+      border: 1px solid var(--line);
     }}
 
     .stat dt {{
@@ -178,7 +204,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
         linear-gradient(180deg, rgba(79,179,255,0.05), transparent 55%),
         var(--panel-alt);
       border-radius: 18px;
-      border: 1px solid rgba(255,255,255,0.04);
+      border: 1px solid var(--line);
       padding: 12px;
     }}
 
@@ -186,6 +212,58 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       width: 100%;
       height: 100%;
       display: block;
+    }}
+
+    .config-stack {{
+      display: grid;
+      gap: 12px;
+    }}
+
+    .config-section {{
+      padding: 14px;
+      border-radius: 16px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+    }}
+
+    .config-title {{
+      margin: 0 0 12px;
+      font-size: 14px;
+      color: var(--text);
+      letter-spacing: 0.02em;
+    }}
+
+    .kv-list {{
+      display: grid;
+      gap: 8px;
+    }}
+
+    .kv-row {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 13px;
+    }}
+
+    .kv-row:last-child {{
+      border-bottom: 0;
+      padding-bottom: 0;
+    }}
+
+    .kv-label {{
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 11px;
+    }}
+
+    .kv-value {{
+      color: var(--text);
+      text-align: right;
+      max-width: 58%;
+      word-break: break-word;
     }}
 
     .table-wrap {{
@@ -200,7 +278,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
 
     th, td {{
       padding: 12px 10px;
-      border-bottom: 1px solid rgba(255,255,255,0.06);
+      border-bottom: 1px solid var(--line);
       text-align: left;
       white-space: nowrap;
     }}
@@ -212,10 +290,31 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
 
     .buy {{ color: var(--accent-2); }}
     .sell {{ color: var(--warn); }}
+    .muted {{ color: var(--muted); }}
+    .danger {{ color: var(--danger); }}
+    .empty {{
+      color: var(--muted);
+      text-align: center;
+      padding: 20px 0;
+    }}
 
     @media (max-width: 980px) {{
       .layout {{
         grid-template-columns: 1fr;
+      }}
+
+      .stats-grid {{
+        grid-template-columns: 1fr;
+      }}
+
+      .kv-row {{
+        align-items: flex-start;
+        flex-direction: column;
+      }}
+
+      .kv-value {{
+        max-width: 100%;
+        text-align: left;
       }}
     }}
   </style>
@@ -226,10 +325,11 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       <div class="eyebrow">QuantTrade Report</div>
       <h1>Backtest Dashboard</h1>
       <div class="subcopy">
-        A static research dashboard generated from the current QuantTrade backtest pipeline.
-        It is designed to make the strategy state, account state, equity progression, drawdown behavior,
-        and recent fills readable without spinning up a server.
+        A static research workspace generated from the QuantTrade backtest pipeline.
+        It surfaces strategy parameters, execution constraints, audit activity, account state,
+        and recent order flow in one page so a single run can be reviewed without starting a server.
       </div>
+      <div id="run-context-strip" class="context-strip"></div>
     </section>
 
     <section id="summary-cards" class="card-grid"></section>
@@ -242,6 +342,7 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
             <div class="panel-note">Mark-to-market account equity by bar</div>
           </div>
           <div class="chart"><svg id="equity-chart" viewBox="0 0 800 260" preserveAspectRatio="none"></svg></div>
+          <dl id="chart-summary" class="stats-grid compact" style="margin-top: 14px;"></dl>
         </section>
 
         <section class="panel">
@@ -304,6 +405,22 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       <div class="stack">
         <section class="panel">
           <div class="panel-head">
+            <h2 class="panel-title">Run Context</h2>
+            <div class="panel-note">Snapshot of the current research run</div>
+          </div>
+          <div id="run-context" class="kv-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Parameter Panels</h2>
+            <div class="panel-note">Strategy, risk, and execution inputs used for this run</div>
+          </div>
+          <div id="config-sections" class="config-stack"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
             <h2 class="panel-title">Account Summary</h2>
             <div class="panel-note">End-of-run account state</div>
           </div>
@@ -324,6 +441,14 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
             <div class="panel-note">Execution pipeline health snapshot</div>
           </div>
           <dl id="order-summary" class="stats-grid"></dl>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Audit Summary</h2>
+            <div class="panel-note">Signal and controller activity condensed into counters</div>
+          </div>
+          <dl id="audit-summary" class="stats-grid"></dl>
         </section>
 
         <section class="panel">
@@ -354,7 +479,18 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
 
     // 统一数字格式化，避免各个渲染函数各自处理小数位。
     function fmt(value) {{
+      if (typeof value === "boolean") {{
+        return value ? "true" : "false";
+      }}
       return typeof value === "number" ? value.toLocaleString(undefined, {{ maximumFractionDigits: 4 }}) : value;
+    }}
+
+    function prettyKey(value) {{
+      return String(value).replace(/_/g, " ");
+    }}
+
+    function emptyRow(colspan, label) {{
+      return `<tr><td colspan="${{colspan}}" class="empty">${{label}}</td></tr>`;
     }}
 
     // 顶部卡片只负责回答“这次回测结果大概怎么样”。
@@ -368,20 +504,65 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
 
+    function renderContextStrip() {{
+      const target = document.getElementById("run-context-strip");
+      const context = payload.run_context || {{}};
+      const chips = [
+        ["symbol", context.symbol],
+        ["timeframe", context.timeframe],
+        ["bars", context.bars_processed],
+        ["strategy", context.strategy_name],
+      ];
+      target.innerHTML = chips.map(([label, value]) => `
+        <div class="context-chip"><strong>${{label}}</strong>${{fmt(value)}}</div>
+      `).join("");
+    }}
+
     // 统计区域用于展示账户、绩效、订单健康度等成组信息。
     function renderStats(id, stats) {{
       const target = document.getElementById(id);
       target.innerHTML = Object.entries(stats).map(([key, value]) => `
         <div class="stat">
-          <dt>${{key.replace(/_/g, " ")}}</dt>
+          <dt>${{prettyKey(key)}}</dt>
           <dd>${{fmt(value)}}</dd>
         </div>
+      `).join("");
+    }}
+
+    function renderKeyValueList(id, values) {{
+      const target = document.getElementById(id);
+      target.innerHTML = Object.entries(values).map(([key, value]) => `
+        <div class="kv-row">
+          <div class="kv-label">${{prettyKey(key)}}</div>
+          <div class="kv-value">${{fmt(value)}}</div>
+        </div>
+      `).join("");
+    }}
+
+    function renderConfigSections() {{
+      const target = document.getElementById("config-sections");
+      target.innerHTML = payload.config_sections.map(section => `
+        <section class="config-section">
+          <h3 class="config-title">${{section.title}}</h3>
+          <div class="kv-list">
+            ${{section.items.map(item => `
+              <div class="kv-row">
+                <div class="kv-label">${{prettyKey(item.label)}}</div>
+                <div class="kv-value">${{fmt(item.value)}}</div>
+              </div>
+            `).join("")}}
+          </div>
+        </section>
       `).join("");
     }}
 
     // 近期成交表帮助我们快速确认最近有哪些真实 fill。
     function renderTrades() {{
       const target = document.getElementById("recent-trades");
+      if (!payload.recent_trades.length) {{
+        target.innerHTML = emptyRow(7, "No fills were generated in this run.");
+        return;
+      }}
       target.innerHTML = payload.recent_trades.map(trade => `
         <tr>
           <td>${{trade.timestamp}}</td>
@@ -398,6 +579,10 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
     // 近期订单表会保留更多执行细节，例如已成交数量和剩余数量。
     function renderOrders() {{
       const target = document.getElementById("recent-orders");
+      if (!payload.recent_orders.length) {{
+        target.innerHTML = emptyRow(9, "No order events were generated in this run.");
+        return;
+      }}
       target.innerHTML = payload.recent_orders.map(order => `
         <tr>
           <td>${{order.timestamp}}</td>
@@ -416,6 +601,10 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
     // 审计日志表主要回答“系统为什么会这样决定”。
     function renderAuditLog() {{
       const target = document.getElementById("audit-log");
+      if (!payload.audit_timeline.length) {{
+        target.innerHTML = emptyRow(4, "No audit events were recorded.");
+        return;
+      }}
       target.innerHTML = payload.audit_timeline.map(event => `
         <tr>
           <td>${{event.timestamp}}</td>
@@ -445,6 +634,10 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
     // 用统一方式渲染净值和回撤两种曲线。
     function renderChart(id, items, accessor, stroke, fill) {{
       const svg = document.getElementById(id);
+      if (!items.length) {{
+        svg.innerHTML = "";
+        return;
+      }}
       const width = 800;
       const height = 260;
       const points = polylinePoints(items, accessor, width, height, false);
@@ -463,10 +656,15 @@ def render_dashboard_html(payload: dict[str, object], output_path: str) -> str:
       `;
     }}
 
+    renderContextStrip();
     renderCards();
+    renderKeyValueList("run-context", payload.run_context);
+    renderConfigSections();
     renderStats("account-summary", payload.account_summary);
     renderStats("performance-summary", payload.performance_summary);
+    renderStats("chart-summary", payload.chart_summary);
     renderStats("order-summary", payload.order_summary);
+    renderStats("audit-summary", payload.audit_summary);
     renderTrades();
     renderOrders();
     renderAuditLog();
@@ -717,6 +915,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Attempts</th>
                   <th>Retried</th>
                   <th>Protected</th>
+                  <th>Decision Path</th>
                   <th>Path</th>
                 </tr>
               </thead>
@@ -752,6 +951,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Recovered</th>
                   <th>Failures Before</th>
                   <th>Protection</th>
+                  <th>Retry</th>
+                  <th>Failure Class</th>
                 </tr>
               </thead>
               <tbody id="execution-table"></tbody>
@@ -775,6 +976,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Attempt</th>
                   <th>Run ID</th>
                   <th>Protection</th>
+                  <th>Retry</th>
+                  <th>Failure Class</th>
                   <th>Reason</th>
                 </tr>
               </thead>
@@ -886,6 +1089,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Recovered</th>
                   <th>Failures Before</th>
                   <th>Protection</th>
+                  <th>Retry</th>
+                  <th>Failure Class</th>
                   <th>Reason</th>
                 </tr>
               </thead>
@@ -1045,6 +1250,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Request Chains", value: summary.total_execution_requests }},
         {{ label: "Retried Requests", value: summary.retried_execution_requests }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
+        {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
         {{ label: "Execution Blocked", value: summary.blocked_executions }},
         {{ label: "Protection Starts", value: summary.protection_mode_executions }},
@@ -1108,6 +1314,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(request.attempt_count)}}</td>
           <td>${{request.retried ? "yes" : "no"}}</td>
           <td>${{request.protection_mode_seen ? "yes" : "no"}}</td>
+          <td>${{request.decision_path || ""}}</td>
           <td>${{request.attempt_path}}</td>
         </tr>
       `).join("");
@@ -1143,6 +1350,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(attempt.attempt_number)}}</td>
           <td>${{attempt.run_id || ""}}</td>
           <td>${{attempt.protection_mode ? "on" : "off"}}</td>
+          <td>${{attempt.retry_decision || ""}}</td>
+          <td>${{attempt.failure_class || ""}}</td>
           <td>${{attempt.error_message || attempt.protection_reason || ""}}</td>
         </tr>
       `).join("");
@@ -1175,6 +1384,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(execution.recovered_execution_count)}}</td>
           <td>${{fmt(execution.consecutive_failures_before_start)}}</td>
           <td>${{execution.protection_mode ? "on" : "off"}}</td>
+          <td>${{execution.retry_decision || ""}}</td>
+          <td>${{execution.failure_class || ""}}</td>
         </tr>
       `).join("");
       document.querySelectorAll("#execution-table [data-execution-id]").forEach(node => {{
@@ -1195,7 +1406,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       // 详情面板把一次执行尝试的“控制器级状态”摊开，便于判断是否要继续追订单层。
       const execution = findExecution(state.executionId);
       document.getElementById("execution-detail-meta").textContent = execution
-        ? `Execution ${{execution.execution_id}} | Request: ${{execution.request_id || ""}} | Status: ${{execution.status}} | Attempt: ${{execution.attempt_number}} | Recovered Starts: ${{execution.recovered_execution_count}} | Failures Before Start: ${{execution.consecutive_failures_before_start}} | Protection: ${{execution.protection_mode ? "on" : "off"}}`
+        ? `Execution ${{execution.execution_id}} | Request: ${{execution.request_id || ""}} | Status: ${{execution.status}} | Attempt: ${{execution.attempt_number}} | Retry: ${{execution.retry_decision || ""}} | Failure Class: ${{execution.failure_class || ""}} | Recovered Starts: ${{execution.recovered_execution_count}} | Failures Before Start: ${{execution.consecutive_failures_before_start}} | Protection: ${{execution.protection_mode ? "on" : "off"}}`
         : "No execution selected.";
       document.getElementById("execution-detail-table").innerHTML = execution ? `
         <tr>
@@ -1207,6 +1418,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(execution.recovered_execution_count)}}</td>
           <td>${{fmt(execution.consecutive_failures_before_start)}}</td>
           <td>${{execution.protection_mode ? "on" : "off"}}</td>
+          <td>${{execution.retry_decision || ""}}</td>
+          <td>${{execution.failure_class || ""}}</td>
           <td>${{execution.error_message || execution.protection_reason || ""}}</td>
         </tr>
       ` : "";
