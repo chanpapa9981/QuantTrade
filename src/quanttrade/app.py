@@ -1236,6 +1236,100 @@ class QuantTradeApp:
             "results": results,
         }
 
+    def recent_maintenance_cycles(self, limit: int = 20) -> dict[str, object]:
+        """查询最近的控制器维护周期。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"maintenance_cycles": repository.fetch_recent_maintenance_cycles(limit=limit)}
+
+    def maintenance_cycle_detail(self, cycle_id: str) -> dict[str, object]:
+        """查看单个维护周期的完整详情。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"cycle": repository.fetch_maintenance_cycle_detail(cycle_id=cycle_id)}
+
+    def maintenance_run_once(self, runs_limit: int = 20, events_limit: int = 50) -> dict[str, object]:
+        """执行一次完整的控制器维护周期。
+
+        这个维护周期会把目前已经做好的几条运维能力串成一次真正的“值班节拍”：
+        1. 先修可自动修的脏状态；
+        2. 再扫描 controller health，并把关键问题抬成通知；
+        3. 再跑通知升级和投递；
+        4. 最后把这次维护做了什么持久化下来。
+        """
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            cycle_id = repository.create_maintenance_cycle(reconcile_runtime=True)
+
+        try:
+            reconcile_result = self.reconcile_runtime_state()
+            monitor_result = self.monitor_controller_health(runs_limit=runs_limit, events_limit=events_limit)
+            escalation_result = self.escalate_notifications(limit=events_limit)
+            delivery_result = self.deliver_notifications(limit=events_limit)
+            controller_health = monitor_result["controller_health"]
+            emitted_notifications = monitor_result["emitted_notifications"]
+            cycle_note = (
+                "maintenance cycle completed; "
+                f"issues={len(controller_health.get('issues', []))}; "
+                f"emitted={len(emitted_notifications)}; "
+                f"escalated={int(escalation_result.get('escalated', 0))}; "
+                f"delivered={int(delivery_result.get('dispatched', 0))}"
+            )
+            with database_lock(self.settings.data.duckdb_path):
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                repository.finish_maintenance_cycle(
+                    cycle_id=cycle_id,
+                    status="completed",
+                    reconcile_runtime=True,
+                    repaired_assignment_timestamps=int(reconcile_result.get("repaired_assignment_timestamps", 0)),
+                    repaired_resolution_acknowledgements=int(reconcile_result.get("repaired_resolution_acknowledgements", 0)),
+                    recovered_stale_executions=int(reconcile_result.get("recovered_stale_executions", 0)),
+                    controller_issue_count=len(controller_health.get("issues", [])),
+                    emitted_notification_count=len(emitted_notifications),
+                    escalated_notification_count=int(escalation_result.get("escalated", 0)),
+                    delivered_notification_count=int(delivery_result.get("dispatched", 0)),
+                    delivery_failed_count=(
+                        int(delivery_result.get("failed_retryable", 0))
+                        + int(delivery_result.get("failed_final", 0))
+                    ),
+                    remaining_pending_notifications=int(delivery_result.get("remaining_pending", 0)),
+                    cycle_note=cycle_note,
+                )
+                detail = repository.fetch_maintenance_cycle_detail(cycle_id=cycle_id)
+            return {
+                "status": "completed",
+                "cycle": detail,
+                "reconcile": reconcile_result,
+                "monitor": monitor_result,
+                "escalation": escalation_result,
+                "delivery": delivery_result,
+            }
+        except Exception as exc:
+            with database_lock(self.settings.data.duckdb_path):
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                repository.finish_maintenance_cycle(
+                    cycle_id=cycle_id,
+                    status="failed",
+                    reconcile_runtime=True,
+                    error_message=str(exc),
+                    cycle_note="maintenance cycle failed before all control actions completed",
+                )
+                detail = repository.fetch_maintenance_cycle_detail(cycle_id=cycle_id)
+            self._record_notification(
+                severity="error",
+                category="maintenance_cycle_failed",
+                title="Maintenance cycle failed",
+                message=str(exc),
+            )
+            return {
+                "status": "failed",
+                "cycle": detail,
+                "error_message": str(exc),
+            }
+
     def notification_summary(self, limit: int = 50) -> dict[str, object]:
         """汇总最近通知事件，方便快速看近况而不是逐条翻告警。"""
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
@@ -1558,6 +1652,7 @@ class QuantTradeApp:
                 bundle["runs"],
                 bundle["executions"],
                 bundle["live_cycles"],
+                bundle["maintenance_cycles"],
                 bundle["broker_syncs"],
                 bundle["orders"],
                 bundle["audit_events"],

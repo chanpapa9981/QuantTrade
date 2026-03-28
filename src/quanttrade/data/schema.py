@@ -211,6 +211,28 @@ def create_schema(db_path: str) -> None:
                 submitted_at TEXT NOT NULL DEFAULT '',
                 source_updated_at TEXT NOT NULL DEFAULT ''
             );
+
+            CREATE TABLE IF NOT EXISTS maintenance_cycles (
+                cycle_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                reconcile_runtime INTEGER NOT NULL DEFAULT 0,
+                repaired_assignment_timestamps INTEGER NOT NULL DEFAULT 0,
+                repaired_resolution_acknowledgements INTEGER NOT NULL DEFAULT 0,
+                recovered_stale_executions INTEGER NOT NULL DEFAULT 0,
+                controller_issue_count INTEGER NOT NULL DEFAULT 0,
+                emitted_notification_count INTEGER NOT NULL DEFAULT 0,
+                escalated_notification_count INTEGER NOT NULL DEFAULT 0,
+                delivered_notification_count INTEGER NOT NULL DEFAULT 0,
+                delivery_failed_count INTEGER NOT NULL DEFAULT 0,
+                remaining_pending_notifications INTEGER NOT NULL DEFAULT 0,
+                cycle_note TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_maintenance_cycles_started
+            ON maintenance_cycles(started_at);
             """
         )
         # 历史版本数据库可能没有这些字段，所以这里用增量迁移方式自动补齐。
@@ -276,5 +298,19 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS error_message TEXT DEFAULT '';")
         connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS runner_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS cycle_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS finished_at TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'running';")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS reconcile_runtime INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS repaired_assignment_timestamps INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS repaired_resolution_acknowledgements INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS recovered_stale_executions INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS controller_issue_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS emitted_notification_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS escalated_notification_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS delivered_notification_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS delivery_failed_count INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS remaining_pending_notifications INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS cycle_note TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS error_message TEXT DEFAULT '';")
     finally:
         connection.close()

@@ -395,6 +395,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("idle_live_runners", history_payload["history_summary"])
         self.assertIn("stalled_live_runners", history_payload["history_summary"])
         self.assertIn("live_runner_summary", history_payload)
+        self.assertIn("recent_maintenance_cycles", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""
@@ -2255,6 +2256,78 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(monitored["emitted_notifications"][0]["notification"]["delivery_status"], "queued")
         self.assertEqual(recent_notifications["notifications"][0]["category"], "controller_stale_broker_snapshot")
         self.assertTrue(outbox_path.exists())
+
+    def test_maintenance_run_once_persists_operational_stats(self) -> None:
+        """验证维护周期会把 reconcile、monitor、escalate、deliver 的结果一起持久化。"""
+        base_dir = Path("var/test-artifacts/maintenance-cycle")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "maintenance-cycle.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        delivery_log_path = base_dir / "delivery-log.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+        if delivery_log_path.exists():
+            delivery_log_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_delivery_log_path=str(delivery_log_path),
+            notification_escalation_window_seconds=1,
+            notification_escalation_min_severity="critical",
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="maintenance notification",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET timestamp = ?
+                WHERE event_id = ?
+                """,
+                ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(), created["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        result = app.maintenance_run_once(runs_limit=5, events_limit=10)
+        recent_cycles = app.recent_maintenance_cycles(limit=5)["maintenance_cycles"]
+        detail = app.maintenance_cycle_detail(cycle_id=result["cycle"]["cycle_id"])["cycle"]
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["cycle"]["status"], "completed")
+        self.assertGreaterEqual(result["reconcile"]["recovered_stale_executions"], 1)
+        self.assertGreaterEqual(result["delivery"]["dispatched"], 1)
+        self.assertGreaterEqual(result["escalation"]["escalated"], 1)
+        self.assertEqual(recent_cycles[0]["cycle_id"], result["cycle"]["cycle_id"])
+        self.assertEqual(detail["cycle_id"], result["cycle"]["cycle_id"])
+        self.assertTrue(detail["reconcile_runtime"])
+        self.assertGreaterEqual(detail["recovered_stale_executions"], 1)
+        self.assertGreaterEqual(detail["delivered_notification_count"], 1)
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

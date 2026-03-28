@@ -71,6 +71,13 @@ def build_parser() -> argparse.ArgumentParser:
     live_runner_parser.add_argument("--cycles", type=int, help="How many cycles to run in this foreground session")
     live_runner_status_parser = subparsers.add_parser("live-runner-status", help="Show aggregated live runner status rows")
     live_runner_status_parser.add_argument("--limit", type=int, default=20, help="Number of recent live cycles to inspect")
+    maintenance_run_once_parser = subparsers.add_parser("maintenance-run-once", help="Run one controller maintenance cycle")
+    maintenance_run_once_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to inspect during controller monitoring")
+    maintenance_run_once_parser.add_argument("--events-limit", type=int, default=50, help="Number of recent events to inspect during maintenance")
+    maintenance_cycles_parser = subparsers.add_parser("maintenance-cycles", help="List recent controller maintenance cycles")
+    maintenance_cycles_parser.add_argument("--limit", type=int, default=20, help="Number of maintenance cycles to list")
+    maintenance_cycle_detail_parser = subparsers.add_parser("maintenance-cycle-detail", help="Show one controller maintenance cycle detail")
+    maintenance_cycle_detail_parser.add_argument("--cycle-id", required=True, help="Maintenance cycle id")
     live_cycles_parser = subparsers.add_parser("live-cycles", help="List recent live runner cycles")
     live_cycles_parser.add_argument("--limit", type=int, default=20, help="Number of live cycles to list")
     live_cycle_detail_parser = subparsers.add_parser("live-cycle-detail", help="Show one live runner cycle detail")
@@ -297,6 +304,24 @@ def main() -> None:
 
     if args.command == "live-runner-status":
         print(json.dumps(app.live_runner_status(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "maintenance-run-once":
+        print(
+            json.dumps(
+                app.maintenance_run_once(runs_limit=args.runs_limit, events_limit=args.events_limit),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if args.command == "maintenance-cycles":
+        print(json.dumps(app.recent_maintenance_cycles(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "maintenance-cycle-detail":
+        print(json.dumps(app.maintenance_cycle_detail(cycle_id=args.cycle_id), indent=2, ensure_ascii=False))
         return
 
     if args.command == "live-cycles":

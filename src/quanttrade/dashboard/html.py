@@ -1267,6 +1267,31 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </section>
 
         <section class="panel">
+          <h2 class="panel-title">Recent Maintenance Cycles</h2>
+          <div class="panel-note">Controller maintenance runs that reconcile, monitor, escalate and deliver operational work</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cycle ID</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Reconcile</th>
+                  <th>Recovered Exec</th>
+                  <th>Issues</th>
+                  <th>Emitted</th>
+                  <th>Escalated</th>
+                  <th>Delivered</th>
+                  <th>Pending</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody id="maintenance-cycle-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Broker Health</h2>
           <div class="panel-note">Freshness and latest status of the most recent broker snapshot</div>
           <div class="table-wrap">
@@ -1590,6 +1615,9 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Live Runners", value: summary.live_runners }},
         {{ label: "Idle Runners", value: summary.idle_live_runners }},
         {{ label: "Stalled Runners", value: summary.stalled_live_runners }},
+        {{ label: "Maintenance Cycles", value: summary.total_maintenance_cycles }},
+        {{ label: "Failed Maintenance", value: summary.failed_maintenance_cycles }},
+        {{ label: "Last Maintenance", value: summary.latest_maintenance_status || "-" }},
         {{ label: "Broker Syncs", value: summary.total_broker_syncs }},
         {{ label: "Broker Sync Failed", value: summary.failed_broker_syncs }},
         {{ label: "Broker Stale", value: summary.stale_broker_syncs }},
@@ -1885,6 +1913,22 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{sync.error_message || ""}}</td>
         </tr>
       `).join("") : '<tr><td colspan="12" class="muted">No broker sync rows in the current view.</td></tr>';
+      const maintenanceRows = payload.recent_maintenance_cycles || [];
+      document.getElementById("maintenance-cycle-table").innerHTML = maintenanceRows.length ? maintenanceRows.map(cycle => `
+        <tr class="${{cycle.status === "failed" ? "row-anomaly" : ""}}">
+          <td>${{cycle.cycle_id}}</td>
+          <td>${{cycle.status}}</td>
+          <td>${{cycle.started_at || ""}}</td>
+          <td>${{cycle.reconcile_runtime ? "yes" : "no"}}</td>
+          <td>${{fmt(cycle.recovered_stale_executions)}}</td>
+          <td>${{fmt(cycle.controller_issue_count)}}</td>
+          <td>${{fmt(cycle.emitted_notification_count)}}</td>
+          <td>${{fmt(cycle.escalated_notification_count)}}</td>
+          <td>${{fmt(cycle.delivered_notification_count)}}</td>
+          <td>${{fmt(cycle.remaining_pending_notifications)}}</td>
+          <td>${{cycle.cycle_note || cycle.error_message || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="11" class="muted">No maintenance cycles in the current view.</td></tr>';
     }}
     function renderExecutionDetail() {{
       // 详情面板把一次执行尝试的“控制器级状态”摊开，便于判断是否要继续追订单层。

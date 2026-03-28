@@ -488,6 +488,17 @@ def _build_live_runner_summary(
     return rows
 
 
+def _build_maintenance_summary(maintenance_cycles: list[dict[str, object]]) -> dict[str, object]:
+    """把维护周期压成顶部摘要。"""
+    latest = maintenance_cycles[0] if maintenance_cycles else {}
+    return {
+        "total_maintenance_cycles": len(maintenance_cycles),
+        "failed_maintenance_cycles": len([item for item in maintenance_cycles if item.get("status") == "failed"]),
+        "latest_maintenance_status": str(latest.get("status", "")),
+        "latest_maintenance_at": str(latest.get("started_at", "")),
+    }
+
+
 def _build_broker_sync_summary(broker_syncs: list[dict[str, object]]) -> dict[str, object]:
     """把券商同步记录压缩成历史页顶部摘要。
 
@@ -896,6 +907,7 @@ def build_history_payload(
     runs: list[dict[str, object]],
     executions: list[dict[str, object]],
     live_cycles: list[dict[str, object]],
+    maintenance_cycles: list[dict[str, object]],
     broker_syncs: list[dict[str, object]],
     orders: list[dict[str, object]],
     audit_events: list[dict[str, object]],
@@ -922,6 +934,7 @@ def build_history_payload(
         live_cycles,
         stall_threshold_seconds=max(float(live_runner_stall_threshold_seconds), 0.0),
     )
+    maintenance_summary = _build_maintenance_summary(maintenance_cycles)
     broker_sync_summary = _build_broker_sync_summary(broker_syncs)
     broker_health = _build_broker_health(
         broker_syncs,
@@ -976,6 +989,10 @@ def build_history_payload(
             "live_runners": len(live_runner_summary),
             "idle_live_runners": len([item for item in live_runner_summary if int(item.get("idle_streak", 0)) > 0]),
             "stalled_live_runners": len([item for item in live_runner_summary if item.get("stalled")]),
+            "total_maintenance_cycles": maintenance_summary["total_maintenance_cycles"],
+            "failed_maintenance_cycles": maintenance_summary["failed_maintenance_cycles"],
+            "latest_maintenance_status": maintenance_summary["latest_maintenance_status"],
+            "latest_maintenance_at": maintenance_summary["latest_maintenance_at"],
             "total_broker_syncs": broker_sync_summary["total_broker_syncs"],
             "failed_broker_syncs": broker_sync_summary["failed_broker_syncs"],
             "stale_broker_syncs": int(bool(broker_health["stale"])),
@@ -1086,6 +1103,7 @@ def build_history_payload(
         "recent_executions": executions,
         "recent_live_cycles": live_cycles,
         "live_runner_summary": live_runner_summary[:8],
+        "recent_maintenance_cycles": maintenance_cycles,
         "recent_broker_syncs": broker_syncs,
         "broker_health": broker_health,
         "broker_reconcile": broker_reconcile,

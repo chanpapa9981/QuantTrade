@@ -1007,6 +1007,18 @@
 | 未完成 | 巡检任务自动调度、按 issue 类型做更细的通知静默策略、controller issue 聚合去重、巡检结果和 live runner 周期更深联动 |
 | 备注 | 这一轮把 controller health 从“会说哪里坏了”推进成了“会主动把坏消息抬出来”的更成熟运维骨架 |
 
+### 2026-03-28 第 62 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把零散的运维动作串成一次真正可持久化的维护周期，让系统开始具备“准 daemon 运维节拍” |
+| 输入 | 已有 `reconcile-runtime`、`controller-monitor`、`notification-escalate`、`notifications-deliver`，但这些能力仍然是分散的手工命令；如果不把它们串成一个统一 cycle，就无法回答“这次维护到底做了什么、修了多少、发了多少通知、有没有失败” |
+| 产出 | `maintenance_cycles` 表；`maintenance-run-once` / `maintenance-cycles` / `maintenance-cycle-detail` CLI；维护周期统计字段；history 摘要里的 `Maintenance Cycles / Failed Maintenance / Last Maintenance`；`Recent Maintenance Cycles` 面板；对应测试 |
+| 结果 | 现在系统可以把一次完整的控制器维护过程持久化成一条 cycle：它会记录 runtime reconcile 修了多少脏状态、controller monitor 发现了多少问题、发了多少通知、升级了多少告警、真正送达了多少通知，以及还有多少待投递积压 |
+| 为什么这么做 | 因为真正可持续运行的系统，不只是“功能很多”，还必须能回答“我上一轮维护到底干了什么”。把维护动作串成 cycle 后，控制器才开始像一个可以被审计、被复盘、被长期观察的运维系统，而不是几条需要人手工拼装的命令。 |
+| 未完成 | 定时调度 maintenance cycle、maintenance cycle 与 live runner 自动联动、按 maintenance 失败自动重试、maintenance KPI 趋势页 |
+| 备注 | 这一轮把运维能力从“命令集合”推进成了“有节拍、有账本”的维护骨架 |
+
 ---
 
 ## 10. 完整项目搭建观察框架

@@ -1887,6 +1887,28 @@ class BacktestRunRepository:
             "cycle_note": row[16],
         }
 
+    @staticmethod
+    def _maintenance_cycle_row_to_dict(row: object) -> dict[str, object]:
+        """把 maintenance cycle 查询结果统一转换成字典。"""
+        return {
+            "cycle_id": row[0],
+            "started_at": row[1],
+            "finished_at": row[2],
+            "status": row[3],
+            "reconcile_runtime": bool(row[4]),
+            "repaired_assignment_timestamps": row[5],
+            "repaired_resolution_acknowledgements": row[6],
+            "recovered_stale_executions": row[7],
+            "controller_issue_count": row[8],
+            "emitted_notification_count": row[9],
+            "escalated_notification_count": row[10],
+            "delivered_notification_count": row[11],
+            "delivery_failed_count": row[12],
+            "remaining_pending_notifications": row[13],
+            "cycle_note": row[14],
+            "error_message": row[15],
+        }
+
     def create_live_cycle(
         self,
         *,
@@ -2060,6 +2082,155 @@ class BacktestRunRepository:
         if row is None:
             return None
         return self._live_cycle_row_to_dict(row)
+
+    def create_maintenance_cycle(self, *, reconcile_runtime: bool) -> str:
+        """创建一条新的维护周期记录。"""
+        connection = connect_database(self.db_path)
+        cycle_id = str(uuid4())
+        started_at = datetime.now(UTC).isoformat()
+        try:
+            connection.execute(
+                """
+                INSERT INTO maintenance_cycles (
+                    cycle_id, started_at, finished_at, status, reconcile_runtime,
+                    repaired_assignment_timestamps, repaired_resolution_acknowledgements, recovered_stale_executions,
+                    controller_issue_count, emitted_notification_count, escalated_notification_count,
+                    delivered_notification_count, delivery_failed_count, remaining_pending_notifications,
+                    cycle_note, error_message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cycle_id,
+                    started_at,
+                    "",
+                    "running",
+                    1 if reconcile_runtime else 0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "",
+                    "",
+                ),
+            )
+            return cycle_id
+        finally:
+            connection.close()
+
+    def finish_maintenance_cycle(
+        self,
+        *,
+        cycle_id: str,
+        status: str,
+        reconcile_runtime: bool,
+        repaired_assignment_timestamps: int = 0,
+        repaired_resolution_acknowledgements: int = 0,
+        recovered_stale_executions: int = 0,
+        controller_issue_count: int = 0,
+        emitted_notification_count: int = 0,
+        escalated_notification_count: int = 0,
+        delivered_notification_count: int = 0,
+        delivery_failed_count: int = 0,
+        remaining_pending_notifications: int = 0,
+        cycle_note: str = "",
+        error_message: str = "",
+    ) -> None:
+        """把 maintenance cycle 从 running 更新成最终状态。"""
+        connection = connect_database(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE maintenance_cycles
+                SET finished_at = ?,
+                    status = ?,
+                    reconcile_runtime = ?,
+                    repaired_assignment_timestamps = ?,
+                    repaired_resolution_acknowledgements = ?,
+                    recovered_stale_executions = ?,
+                    controller_issue_count = ?,
+                    emitted_notification_count = ?,
+                    escalated_notification_count = ?,
+                    delivered_notification_count = ?,
+                    delivery_failed_count = ?,
+                    remaining_pending_notifications = ?,
+                    cycle_note = ?,
+                    error_message = ?
+                WHERE cycle_id = ?
+                """,
+                (
+                    datetime.now(UTC).isoformat(),
+                    status[:40],
+                    1 if reconcile_runtime else 0,
+                    max(int(repaired_assignment_timestamps), 0),
+                    max(int(repaired_resolution_acknowledgements), 0),
+                    max(int(recovered_stale_executions), 0),
+                    max(int(controller_issue_count), 0),
+                    max(int(emitted_notification_count), 0),
+                    max(int(escalated_notification_count), 0),
+                    max(int(delivered_notification_count), 0),
+                    max(int(delivery_failed_count), 0),
+                    max(int(remaining_pending_notifications), 0),
+                    cycle_note[:500],
+                    error_message[:500],
+                    cycle_id[:80],
+                ),
+            )
+        finally:
+            connection.close()
+
+    def fetch_recent_maintenance_cycles(self, limit: int = 20) -> list[dict[str, object]]:
+        """查询最近的维护周期记录。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "maintenance_cycles" for table in tables):
+                return []
+            rows = connection.execute(
+                """
+                SELECT cycle_id, started_at, finished_at, status, reconcile_runtime,
+                       repaired_assignment_timestamps, repaired_resolution_acknowledgements, recovered_stale_executions,
+                       controller_issue_count, emitted_notification_count, escalated_notification_count,
+                       delivered_notification_count, delivery_failed_count, remaining_pending_notifications,
+                       cycle_note, error_message
+                FROM maintenance_cycles
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._maintenance_cycle_row_to_dict(row) for row in rows]
+
+    def fetch_maintenance_cycle_detail(self, cycle_id: str) -> dict[str, object] | None:
+        """查询单个维护周期的完整详情。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "maintenance_cycles" for table in tables):
+                return None
+            row = connection.execute(
+                """
+                SELECT cycle_id, started_at, finished_at, status, reconcile_runtime,
+                       repaired_assignment_timestamps, repaired_resolution_acknowledgements, recovered_stale_executions,
+                       controller_issue_count, emitted_notification_count, escalated_notification_count,
+                       delivered_notification_count, delivery_failed_count, remaining_pending_notifications,
+                       cycle_note, error_message
+                FROM maintenance_cycles
+                WHERE cycle_id = ?
+                """,
+                (cycle_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return None
+        return self._maintenance_cycle_row_to_dict(row)
 
     def fetch_protection_status(self, symbol: str, timeframe: str) -> dict[str, object]:
         """查询某个标的/周期当前的保护模式状态，而不需要触发新的回测。"""
@@ -2393,7 +2564,7 @@ class BacktestRunRepository:
         ]
 
     def fetch_history_bundle(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, list[dict[str, object]]]:
-        """一次性取回历史页面需要的 runs / executions / live cycles / broker syncs / orders / audit / notifications 七组数据。
+        """一次性取回历史页面需要的 runs / executions / live cycles / maintenance / broker syncs / orders / audit / notifications 八组数据。
 
         之所以把 execution 单独带出来，是因为“运行有没有成功”与“订单后来发生了什么”
         属于两个不同层级的问题。历史页需要同时看到这两层，排错才完整。
@@ -2405,6 +2576,7 @@ class BacktestRunRepository:
             runs: list[dict[str, object]] = []
             executions: list[dict[str, object]] = []
             live_cycles: list[dict[str, object]] = []
+            maintenance_cycles: list[dict[str, object]] = []
             broker_syncs: list[dict[str, object]] = []
             orders: list[dict[str, object]] = []
             audit_events: list[dict[str, object]] = []
@@ -2464,6 +2636,22 @@ class BacktestRunRepository:
                     (events_limit,),
                 ).fetchall()
                 live_cycles = [self._live_cycle_row_to_dict(row) for row in live_cycle_rows]
+
+            if "maintenance_cycles" in table_names:
+                maintenance_rows = connection.execute(
+                    """
+                    SELECT cycle_id, started_at, finished_at, status, reconcile_runtime,
+                           repaired_assignment_timestamps, repaired_resolution_acknowledgements, recovered_stale_executions,
+                           controller_issue_count, emitted_notification_count, escalated_notification_count,
+                           delivered_notification_count, delivery_failed_count, remaining_pending_notifications,
+                           cycle_note, error_message
+                    FROM maintenance_cycles
+                    ORDER BY started_at DESC
+                    LIMIT ?
+                    """,
+                    (events_limit,),
+                ).fetchall()
+                maintenance_cycles = [self._maintenance_cycle_row_to_dict(row) for row in maintenance_rows]
 
             if "broker_syncs" in table_names:
                 broker_sync_rows = connection.execute(
@@ -2612,6 +2800,7 @@ class BacktestRunRepository:
             "runs": runs,
             "executions": executions,
             "live_cycles": live_cycles,
+            "maintenance_cycles": maintenance_cycles,
             "broker_syncs": broker_syncs,
             "orders": orders,
             "audit_events": audit_events,
