@@ -277,6 +277,7 @@ def _build_notification_inbox(notification_events: list[dict[str, object]]) -> l
 def _build_controller_health(
     *,
     execution_requests: list[dict[str, object]],
+    live_runner_summary: list[dict[str, object]],
     broker_health: dict[str, object],
     broker_reconcile: dict[str, object],
     notification_events: list[dict[str, object]],
@@ -298,6 +299,7 @@ def _build_controller_health(
     cooldown_requests = len([item for item in execution_requests if item.get("cooldown_active")])
     critical_requests = len([item for item in execution_requests if item.get("health_label") == "critical"])
     watch_requests = len([item for item in execution_requests if item.get("health_label") == "watch"])
+    stalled_live_runners = len([item for item in live_runner_summary if item.get("stalled")])
     stale_broker_snapshot = int(bool(broker_health.get("stale")))
     failed_broker_sync = int(bool(broker_health.get("failed")))
     broker_reconcile_drift = int(broker_reconcile.get("mismatch_count", 0) or 0)
@@ -320,6 +322,12 @@ def _build_controller_health(
             }
         )
 
+    add_issue(
+        code="stalled_live_runner",
+        severity="warning",
+        count=stalled_live_runners,
+        detail="最近一次 live cycle 距今已经超过阈值，runner 可能已经停滞或失联。",
+    )
     add_issue(
         code="failed_broker_sync",
         severity="critical",
@@ -396,6 +404,7 @@ def _build_controller_health(
             "cooldown_requests": cooldown_requests,
             "critical_requests": critical_requests,
             "watch_requests": watch_requests,
+            "stalled_live_runners": stalled_live_runners,
             "failed_broker_sync": failed_broker_sync,
             "stale_broker_snapshot": stale_broker_snapshot,
             "broker_reconcile_drift": broker_reconcile_drift,
@@ -408,7 +417,11 @@ def _build_controller_health(
     }
 
 
-def _build_live_runner_summary(live_cycles: list[dict[str, object]]) -> list[dict[str, object]]:
+def _build_live_runner_summary(
+    live_cycles: list[dict[str, object]],
+    *,
+    stall_threshold_seconds: float = 0.0,
+) -> list[dict[str, object]]:
     """按 runner + market 汇总 live cycle，帮助观察轮询器健康度。"""
     grouped: dict[tuple[str, str, str], list[dict[str, object]]] = {}
     for cycle in live_cycles:
@@ -433,6 +446,15 @@ def _build_live_runner_summary(live_cycles: list[dict[str, object]]) -> list[dic
             (str(item.get("finished_at", "")) for item in ordered if item.get("status") == "completed"),
             "",
         )
+        last_cycle_at = str(latest.get("started_at", ""))
+        last_cycle_age_seconds = 0
+        if last_cycle_at:
+            try:
+                last_cycle_age_seconds = max(int((datetime.now(UTC) - datetime.fromisoformat(last_cycle_at)).total_seconds()), 0)
+            except ValueError:
+                last_cycle_age_seconds = 0
+        effective_stall_threshold = max(float(stall_threshold_seconds), 0.0)
+        stalled = bool(effective_stall_threshold > 0 and last_cycle_age_seconds > effective_stall_threshold)
         rows.append(
             {
                 "runner_id": key[0],
@@ -440,7 +462,7 @@ def _build_live_runner_summary(live_cycles: list[dict[str, object]]) -> list[dic
                 "timeframe": key[2],
                 "cycle_count": len(ordered),
                 "latest_status": str(latest.get("status", "")),
-                "last_cycle_at": str(latest.get("started_at", "")),
+                "last_cycle_at": last_cycle_at,
                 "latest_bar_at": str(latest.get("latest_bar_at", "")),
                 "completed_count": len([item for item in ordered if item.get("status") == "completed"]),
                 "skipped_count": len([item for item in ordered if item.get("status") == "skipped"]),
@@ -449,10 +471,14 @@ def _build_live_runner_summary(live_cycles: list[dict[str, object]]) -> list[dic
                 "protection_hits": len([item for item in ordered if item.get("protection_mode")]),
                 "idle_streak": idle_streak,
                 "last_success_at": last_success_at,
+                "last_cycle_age_seconds": last_cycle_age_seconds,
+                "stall_threshold_seconds": effective_stall_threshold,
+                "stalled": stalled,
             }
         )
     rows.sort(
         key=lambda item: (
+            not bool(item.get("stalled")),
             str(item.get("latest_status", "")) not in {"blocked", "failed"},
             -int(item.get("idle_streak", 0)),
             -int(item.get("cycle_count", 0)),
@@ -534,18 +560,28 @@ def _build_broker_health(
 def _build_broker_reconcile(
     latest_run_detail: dict[str, object] | None,
     latest_broker_sync_detail: dict[str, object] | None,
+    drift_thresholds: dict[str, float] | None = None,
 ) -> dict[str, object]:
-    """对最新本地运行结果和最新 broker 快照做轻量差异预览。"""
+    """对最新本地运行结果和最新 broker 快照做轻量差异预览。
+
+    这里故意把“原始差异”和“真正越过阈值的差异”分开：
+    - 原始差异表示两边数字并不完全一样；
+    - 越阈差异表示这已经不是正常抖动，而是值得控制器升级关注的 drift。
+    """
+    drift_thresholds = drift_thresholds or {}
     if not latest_run_detail or not latest_broker_sync_detail:
         return {
             "status": "unavailable",
             "mismatch_count": 0,
             "latest_run_id": str((latest_run_detail or {}).get("run_id", "")),
             "latest_broker_sync_id": str((latest_broker_sync_detail or {}).get("sync_id", "")),
+            "symbol": str((latest_run_detail or {}).get("run", {}).get("symbol", "")),
+            "timeframe": str((latest_run_detail or {}).get("run", {}).get("timeframe", "")),
             "rows": [],
             "notes": ["latest run detail or broker sync detail is missing"],
         }
 
+    run_summary = dict(latest_run_detail.get("run", {}))
     local_account = dict(latest_run_detail.get("account_snapshot", {}))
     broker_sync = dict(latest_broker_sync_detail.get("sync", {}))
     local_open_orders = len(
@@ -582,19 +618,31 @@ def _build_broker_reconcile(
         },
     ]
     mismatches: list[str] = []
+    raw_differences: list[str] = []
     for row in rows:
         delta = float(row["broker_value"]) - float(row["local_value"])
         row["delta"] = delta
+        threshold = abs(float(drift_thresholds.get(str(row["metric"]), 0.0) or 0.0))
+        breached = abs(delta) > threshold if threshold > 0 else abs(delta) > 0
         if abs(delta) > 0:
+            raw_differences.append(str(row["metric"]))
+        row["threshold"] = threshold
+        row["breached"] = breached
+        row["status"] = "breached" if breached else "within_threshold" if abs(delta) > 0 else "aligned"
+        if breached:
             mismatches.append(str(row["metric"]))
     return {
         "status": "drift" if mismatches else "aligned",
         "mismatch_count": len(mismatches),
         "latest_run_id": str(latest_run_detail.get("run", {}).get("run_id", "")),
         "latest_broker_sync_id": str(broker_sync.get("sync_id", "")),
+        "symbol": str(run_summary.get("symbol", "")),
+        "timeframe": str(run_summary.get("timeframe", "")),
         "rows": rows,
         "notes": (
             ["local run snapshot and broker snapshot are aligned on the tracked metrics"]
+            if not raw_differences
+            else [f"raw differences observed but still within configured thresholds: {', '.join(raw_differences)}"]
             if not mismatches
             else [f"drift detected in: {', '.join(mismatches)}"]
         ),
@@ -854,7 +902,9 @@ def build_history_payload(
     notification_events: list[dict[str, object]],
     notification_assignment_sla_seconds: int = 0,
     notification_assignment_sla_overrides: dict[str, int] | None = None,
+    live_runner_stall_threshold_seconds: float = 0.0,
     broker_max_snapshot_age_seconds: int = 0,
+    broker_reconcile_thresholds: dict[str, float] | None = None,
     latest_run_detail: dict[str, object] | None = None,
     latest_broker_sync_detail: dict[str, object] | None = None,
     runtime_reconcile_preview: dict[str, int] | None = None,
@@ -868,13 +918,20 @@ def build_history_payload(
     notification_summary = _build_notification_summary(notification_events)
     notification_owner_summary = _build_notification_owner_summary(notification_events)
     notification_inbox = _build_notification_inbox(notification_events)
-    live_runner_summary = _build_live_runner_summary(live_cycles)
+    live_runner_summary = _build_live_runner_summary(
+        live_cycles,
+        stall_threshold_seconds=max(float(live_runner_stall_threshold_seconds), 0.0),
+    )
     broker_sync_summary = _build_broker_sync_summary(broker_syncs)
     broker_health = _build_broker_health(
         broker_syncs,
         max_snapshot_age_seconds=max(int(broker_max_snapshot_age_seconds), 0),
     )
-    broker_reconcile = _build_broker_reconcile(latest_run_detail, latest_broker_sync_detail)
+    broker_reconcile = _build_broker_reconcile(
+        latest_run_detail,
+        latest_broker_sync_detail,
+        drift_thresholds=broker_reconcile_thresholds or {},
+    )
     notification_sla_summary = _build_notification_sla_summary(
         notification_events,
         assignment_sla_seconds=max(int(notification_assignment_sla_seconds), 0),
@@ -882,6 +939,7 @@ def build_history_payload(
     )
     controller_health = _build_controller_health(
         execution_requests=execution_requests,
+        live_runner_summary=live_runner_summary,
         broker_health=broker_health,
         broker_reconcile=broker_reconcile,
         notification_events=notification_events,
@@ -917,6 +975,7 @@ def build_history_payload(
             "running_live_cycles": len([item for item in live_cycles if item.get("status") == "running"]),
             "live_runners": len(live_runner_summary),
             "idle_live_runners": len([item for item in live_runner_summary if int(item.get("idle_streak", 0)) > 0]),
+            "stalled_live_runners": len([item for item in live_runner_summary if item.get("stalled")]),
             "total_broker_syncs": broker_sync_summary["total_broker_syncs"],
             "failed_broker_syncs": broker_sync_summary["failed_broker_syncs"],
             "stale_broker_syncs": int(bool(broker_health["stale"])),

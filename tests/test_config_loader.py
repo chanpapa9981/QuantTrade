@@ -31,6 +31,8 @@ class ConfigLoaderTestCase(unittest.TestCase):
         self.assertEqual(settings.risk.max_open_positions, 5)
         self.assertEqual(settings.broker.provider, "local_file")
         self.assertFalse(settings.broker.enabled)
+        self.assertEqual(settings.broker.equity_drift_threshold, 0.0)
+        self.assertEqual(settings.broker.cash_drift_threshold, 0.0)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         broker_positions_snapshot_path: str = "var/broker/positions.json",
         broker_orders_snapshot_path: str = "var/broker/orders.json",
         broker_max_snapshot_age_seconds: int = 0,
+        broker_equity_drift_threshold: float = 0.0,
+        broker_cash_drift_threshold: float = 0.0,
+        broker_position_count_drift_threshold: int = 0,
+        broker_open_order_drift_threshold: int = 0,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -105,6 +109,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  positions_snapshot_path: {broker_positions_snapshot_path}",
                     f"  orders_snapshot_path: {broker_orders_snapshot_path}",
                     f"  max_snapshot_age_seconds: {broker_max_snapshot_age_seconds}",
+                    f"  equity_drift_threshold: {broker_equity_drift_threshold}",
+                    f"  cash_drift_threshold: {broker_cash_drift_threshold}",
+                    f"  position_count_drift_threshold: {broker_position_count_drift_threshold}",
+                    f"  open_order_drift_threshold: {broker_open_order_drift_threshold}",
                     "notification:",
                     f"  provider: {notification_provider}",
                     f"  enabled: {'true' if notification_enabled else 'false'}",
@@ -385,6 +393,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("skipped_live_cycles", history_payload["history_summary"])
         self.assertIn("live_runners", history_payload["history_summary"])
         self.assertIn("idle_live_runners", history_payload["history_summary"])
+        self.assertIn("stalled_live_runners", history_payload["history_summary"])
         self.assertIn("live_runner_summary", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
@@ -2202,6 +2211,73 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_notifications["notifications"][0]["delivery_status"], "queued")
         self.assertTrue(outbox_path.exists())
 
+    def test_live_runner_status_flags_stalled_runner(self) -> None:
+        """验证 live runner 长时间没有新 cycle 时，会在 runner summary 和 controller health 里被标记为 stalled。"""
+        base_dir = Path("var/test-artifacts/live-runner-stalled")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "live-runner-stalled.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 7, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(20):
+                current = start + timedelta(days=offset)
+                price += 0.9
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.4, 2),
+                        "high": round(price + 0.5, 2),
+                        "low": round(price - 0.8, 2),
+                        "close": round(price, 2),
+                        "volume": 2_150_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(
+            config_path,
+            db_path,
+            live_enabled=True,
+            live_runner_id="paper-runner",
+            live_poll_interval_seconds=30.0,
+            live_max_cycles_per_run=1,
+        )
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+        cycle = app.live_run_cycle(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        cycle_id = cycle["cycle"]["cycle_id"]
+
+        connection = connect_database(str(db_path))
+        try:
+            old_timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc).isoformat()
+            connection.execute(
+                """
+                UPDATE live_runner_cycles
+                SET started_at = ?, finished_at = ?
+                WHERE cycle_id = ?
+                """,
+                (old_timestamp, old_timestamp, cycle_id),
+            )
+        finally:
+            connection.close()
+
+        runner_summary = app.live_runner_status(limit=10)["summary"]
+        controller_health = app.controller_health(runs_limit=5, events_limit=10)
+
+        self.assertTrue(runner_summary[0]["stalled"])
+        self.assertGreater(runner_summary[0]["last_cycle_age_seconds"], runner_summary[0]["stall_threshold_seconds"])
+        self.assertEqual(controller_health["controller_health"]["summary"]["stalled_live_runners"], 1)
+        self.assertIn(
+            "stalled_live_runner",
+            [issue["code"] for issue in controller_health["controller_health"]["issues"]],
+        )
+
     def test_retry_backoff_uses_exponential_strategy_and_cap(self) -> None:
         """验证退避计算支持指数增长，并会被最大等待时间封顶。"""
         base_dir = Path("var/test-artifacts/retry-backoff")
@@ -2614,11 +2690,123 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(reconcile["broker_reconcile"]["status"], "drift")
         self.assertGreater(reconcile["broker_reconcile"]["mismatch_count"], 0)
         self.assertEqual(len(reconcile["broker_reconcile"]["rows"]), 4)
+        self.assertTrue(all("threshold" in row for row in reconcile["broker_reconcile"]["rows"]))
+        self.assertTrue(any(bool(row["breached"]) for row in reconcile["broker_reconcile"]["rows"]))
         self.assertIn("drift detected", reconcile["broker_reconcile"]["notes"][0])
         self.assertIn(
             "broker_reconcile_drift",
             [issue["code"] for issue in controller_health["controller_health"]["issues"]],
         )
+
+    def test_broker_reconcile_respects_configured_thresholds(self) -> None:
+        """验证 broker reconcile 会把“有差异但未越阈”的情况视为可容忍偏差，而不是直接报 drift。"""
+        base_dir = Path("var/test-artifacts/broker-reconcile-thresholds")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "broker-reconcile-thresholds.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 10, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(15):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.5, 2),
+                        "high": round(price + 0.6, 2),
+                        "low": round(price - 0.9, 2),
+                        "close": round(price, 2),
+                        "volume": 2_200_000 + offset * 1000,
+                    }
+                )
+
+        account_path, positions_path, orders_path = self._write_broker_snapshots(base_dir)
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(account_path),
+            broker_positions_snapshot_path=str(positions_path),
+            broker_orders_snapshot_path=str(orders_path),
+            broker_equity_drift_threshold=50000.0,
+            broker_cash_drift_threshold=60000.0,
+            broker_position_count_drift_threshold=3,
+            broker_open_order_drift_threshold=2,
+        )
+
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+        app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        app.broker_sync(runner_id="paper-runner")
+
+        reconcile = app.broker_reconcile(limit=10)
+        self.assertEqual(reconcile["broker_reconcile"]["status"], "aligned")
+        self.assertEqual(reconcile["broker_reconcile"]["mismatch_count"], 0)
+        self.assertTrue(all(not bool(row["breached"]) for row in reconcile["broker_reconcile"]["rows"]))
+        self.assertIn("within configured thresholds", reconcile["broker_reconcile"]["notes"][0])
+
+    def test_broker_sync_emits_notification_when_reconcile_drift_is_detected(self) -> None:
+        """验证 broker sync 完成后，如果对账越过阈值，会自动生成 drift 通知。"""
+        base_dir = Path("var/test-artifacts/broker-reconcile-notification")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "broker-reconcile-notification.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 11, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(15):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.5, 2),
+                        "high": round(price + 0.6, 2),
+                        "low": round(price - 0.9, 2),
+                        "close": round(price, 2),
+                        "volume": 2_200_000 + offset * 1000,
+                    }
+                )
+
+        account_path, positions_path, orders_path = self._write_broker_snapshots(base_dir)
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(account_path),
+            broker_positions_snapshot_path=str(positions_path),
+            broker_orders_snapshot_path=str(orders_path),
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+        app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        sync_result = app.broker_sync(runner_id="paper-runner")
+        recent_notifications = app.recent_notification_events(limit=5)
+
+        self.assertEqual(sync_result["status"], "completed")
+        self.assertIsNotNone(sync_result["notification"])
+        self.assertEqual(sync_result["notification"]["delivery_status"], "queued")
+        self.assertTrue(outbox_path.exists())
+        self.assertEqual(recent_notifications["notifications"][0]["category"], "broker_reconcile_drift")
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""

@@ -1026,6 +1026,9 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Blocked</th>
                   <th>Failed</th>
                   <th>Idle Streak</th>
+                  <th>Cycle Age</th>
+                  <th>Stall Threshold</th>
+                  <th>Stalled</th>
                   <th>Protection Hits</th>
                   <th>Last Success</th>
                   <th>Latest Bar</th>
@@ -1299,6 +1302,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Local</th>
                   <th>Broker</th>
                   <th>Delta</th>
+                  <th>Threshold</th>
+                  <th>Breached</th>
                 </tr>
               </thead>
               <tbody id="broker-reconcile-table"></tbody>
@@ -1584,6 +1589,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Live Failed", value: summary.failed_live_cycles }},
         {{ label: "Live Runners", value: summary.live_runners }},
         {{ label: "Idle Runners", value: summary.idle_live_runners }},
+        {{ label: "Stalled Runners", value: summary.stalled_live_runners }},
         {{ label: "Broker Syncs", value: summary.total_broker_syncs }},
         {{ label: "Broker Sync Failed", value: summary.failed_broker_syncs }},
         {{ label: "Broker Stale", value: summary.stale_broker_syncs }},
@@ -1828,7 +1834,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         return true;
       }});
       document.getElementById("live-runner-table").innerHTML = runnerRows.length ? runnerRows.map(row => `
-        <tr class="${{row.latest_status === "failed" || row.latest_status === "blocked" ? "row-anomaly" : ""}}">
+        <tr class="${{row.latest_status === "failed" || row.latest_status === "blocked" || row.stalled ? "row-anomaly" : ""}}">
           <td>${{row.runner_id}}</td>
           <td>${{row.symbol}} / ${{row.timeframe}}</td>
           <td>${{row.latest_status}}</td>
@@ -1838,11 +1844,14 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(row.blocked_count)}}</td>
           <td>${{fmt(row.failed_count)}}</td>
           <td>${{fmt(row.idle_streak)}}</td>
+          <td>${{fmt(row.last_cycle_age_seconds)}}</td>
+          <td>${{fmt(row.stall_threshold_seconds)}}</td>
+          <td>${{row.stalled ? "yes" : "no"}}</td>
           <td>${{fmt(row.protection_hits)}}</td>
           <td>${{row.last_success_at || ""}}</td>
           <td>${{row.latest_bar_at || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="12" class="muted">No live runner summary rows in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="15" class="muted">No live runner summary rows in the current view.</td></tr>';
 
       // broker sync 先走只读快照，但也需要和 runner / request / execution 放在同一页排查。
       const brokerRows = (payload.recent_broker_syncs || []).filter(sync => {{
@@ -2172,13 +2181,15 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         ? `Status: ${{brokerReconcile.status}} | Mismatches: ${{fmt(brokerReconcile.mismatch_count || 0)}} | Run: ${{brokerReconcile.latest_run_id || ""}} | Sync: ${{brokerReconcile.latest_broker_sync_id || ""}} | Note: ${{(brokerReconcile.notes || []).join("; ")}}`
         : "No broker reconcile preview available.";
       document.getElementById("broker-reconcile-table").innerHTML = (brokerReconcile.rows || []).length ? (brokerReconcile.rows || []).map(row => `
-        <tr class="${{Math.abs(row.delta || 0) > 0 ? "row-anomaly" : ""}}">
+        <tr class="${{row.breached ? "row-anomaly" : ""}}">
           <td>${{row.metric}}</td>
           <td>${{fmt(row.local_value)}}</td>
           <td>${{fmt(row.broker_value)}}</td>
           <td>${{fmt(row.delta)}}</td>
+          <td>${{fmt(row.threshold)}}</td>
+          <td>${{row.breached ? "yes" : "no"}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="4" class="muted">No broker reconcile rows in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="6" class="muted">No broker reconcile rows in the current view.</td></tr>';
       const controllerIssues = (payload.controller_health?.issues || []);
       document.getElementById("controller-health-table").innerHTML = controllerIssues.length ? controllerIssues.map(issue => `
         <tr>

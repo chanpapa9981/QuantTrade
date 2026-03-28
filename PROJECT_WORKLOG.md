@@ -971,6 +971,30 @@
 | 未完成 | drift 阈值分级、按 drift 类型自动通知、drift 驱动的 protection 动作、真实券商回报和本地状态的持续对账 |
 | 备注 | 这一轮把 broker 对账预览继续推进成了控制器级告警输入 |
 
+### 2026-03-28 第 59 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 broker reconcile 具备“按阈值判断”和“自动发 drift 告警”的能力，避免因为微小差异把控制器变成噪声制造机 |
+| 输入 | 已有 `Broker Reconcile` 面板和 `broker_reconcile_drift` controller issue，但当前逻辑仍然是“只要有差异就算 drift”；这会把正常浮动、快照采样误差和真正值得处理的偏差混在一起，也缺少把越阈 drift 自动提升成通知的闭环 |
+| 产出 | `broker.equity_drift_threshold` / `cash_drift_threshold` / `position_count_drift_threshold` / `open_order_drift_threshold` 配置；reconcile 行级 `threshold / breached / status` 字段；history 页 `Threshold / Breached` 列；broker sync 完成后自动写入 `broker_reconcile_drift` 通知；对应测试 |
+| 结果 | 现在 broker reconcile 会区分“有差异但仍在容忍范围内”和“真正越过阈值的 drift”；只有越阈指标才会进入 `mismatch_count`、controller health 和自动通知，页面也能直接看出每个指标的阈值和是否 breached |
+| 为什么这么做 | 因为真实环境里本地快照和 broker 快照几乎不可能永远字节级一致。如果不先定义什么叫“值得处理的偏差”，系统很快就会被无意义 drift 淹没。把阈值和自动通知一起补上后，控制器才开始具备“减少噪声、只升级真正问题”的基本素质。 |
+| 未完成 | 按 metric 决定不同告警严重级别、按 symbol/provider 细化 drift 阈值、drift 趋势聚合、drift 触发保护模式或 live runner 暂停 |
+| 备注 | 这一轮把 broker 对账从“看见差异”推进成了“按规则判断并自动升级”的更成熟控制器输入 |
+
+### 2026-03-28 第 60 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 live runner 不只是看“最近状态”，还要能识别“这个 runner 是不是已经太久没心跳，可能停住了” |
+| 输入 | 已有 `Live Runners` 面板和 `idle_streak`，但 idle 只能说明“最近几轮都在 no_new_data 跳过”；如果 runner 进程根本没再产生新 cycle，operator 仍然很难从现有视图里看出它已经停滞 |
+| 产出 | live runner summary 增加 `last_cycle_age_seconds` / `stall_threshold_seconds` / `stalled`；history 顶部 `Stalled Runners` 摘要卡片；controller health 增加 `stalled_live_runner` 问题项；history 页 `Cycle Age / Stall Threshold / Stalled` 列；对应测试 |
+| 结果 | 现在系统会把“最后一次 cycle 距今已超过两个 poll interval”的 runner 标成 stalled，并把它直接拉进 controller health；这样 operator 不必等到别的异常出现，单看健康页就能发现某个 runner 可能已经停住或失联 |
+| 为什么这么做 | 因为长期运行系统最危险的问题之一，就是“它没有明显报错，但其实已经悄悄不工作了”。只看最近一次状态，会误以为 runner 还健康；把 cycle age 和 stalled 判断补上后，控制器才开始具备最基础的心跳监控意识。 |
+| 未完成 | 进程级 heartbeat、跨进程 runner 失联检测、自动重启策略、市场时段感知的 stall 豁免、runner 级通知聚合 |
+| 备注 | 这一轮把 live runner 视图从“看状态”推进成了“看心跳”的更接近真实运维台形态 |
+
 ---
 
 ## 10. 完整项目搭建观察框架

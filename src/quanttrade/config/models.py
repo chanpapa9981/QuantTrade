@@ -119,6 +119,10 @@ class BrokerConfig:
     positions_snapshot_path: str = "var/broker/positions.json"
     orders_snapshot_path: str = "var/broker/orders.json"
     max_snapshot_age_seconds: int = 0
+    equity_drift_threshold: float = 0.0
+    cash_drift_threshold: float = 0.0
+    position_count_drift_threshold: int = 0
+    open_order_drift_threshold: int = 0
 
 
 @dataclass(slots=True)

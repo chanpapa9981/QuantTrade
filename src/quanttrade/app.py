@@ -206,6 +206,32 @@ class QuantTradeApp:
             "critical": max(int(self.settings.notification.assignment_sla_critical_seconds), 0),
         }
 
+    def _broker_reconcile_thresholds(self) -> dict[str, float]:
+        """把 broker drift 阈值整理成统一字典，方便对账层直接消费。
+
+        这里拆成单独方法，是为了把“配置长什么样”和“对账函数怎么用它”解耦。
+        后续如果我们想按 symbol、币种或 broker provider 做更复杂的阈值策略，
+        只需要改这里，不必把上层调用点全部翻一遍。
+        """
+        return {
+            "equity": max(float(self.settings.broker.equity_drift_threshold), 0.0),
+            "cash": max(float(self.settings.broker.cash_drift_threshold), 0.0),
+            "open_positions": max(float(self.settings.broker.position_count_drift_threshold), 0.0),
+            "open_orders": max(float(self.settings.broker.open_order_drift_threshold), 0.0),
+        }
+
+    def _live_runner_stall_threshold_seconds(self) -> float:
+        """返回 live runner 被视为“停滞”的时间阈值。
+
+        这里先用一个保守但简单的经验规则：
+        如果一个 runner 在两个 poll interval 内都没有产生新的 cycle，
+        那它至少值得被拉进健康视图里提醒 operator 看一眼。
+        """
+        poll_interval_seconds = max(float(self.settings.live.poll_interval_seconds), 0.0)
+        if poll_interval_seconds <= 0:
+            return 0.0
+        return poll_interval_seconds * 2.0
+
     def _protection_trigger_failure_classes(self) -> set[str]:
         """整理哪些失败类别应该立即触发保护模式。"""
         return _parse_csv_flag_set(self.settings.execution.protection_trigger_failure_classes)
@@ -777,6 +803,36 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"broker_syncs": repository.fetch_recent_broker_syncs(limit=limit)}
 
+    def _maybe_record_broker_reconcile_notification(self, limit: int = 20) -> dict[str, object] | None:
+        """在 broker 对账真正越阈时，自动写入一条 drift 通知。
+
+        这里故意只针对“越过阈值”的指标发告警：
+        - 如果只是存在微小差异，但仍在容忍范围内，就保留在 reconcile 页面里观察；
+        - 只有差异已经达到控制器认为值得处理的级别，才升级成通知事件。
+        """
+        reconcile = self.broker_reconcile(limit=limit).get("broker_reconcile", {})
+        if str(reconcile.get("status", "")) != "drift":
+            return None
+        breached_rows = [row for row in reconcile.get("rows", []) if bool(row.get("breached"))]
+        if not breached_rows:
+            return None
+        breached_metrics = ", ".join(str(row.get("metric", "")) for row in breached_rows)
+        run_id = str(reconcile.get("latest_run_id", ""))
+        sync_id = str(reconcile.get("latest_broker_sync_id", ""))
+        message = (
+            "broker reconcile drift exceeded configured thresholds; "
+            f"metrics={breached_metrics}; run_id={run_id}; broker_sync_id={sync_id}"
+        )
+        return self._record_notification(
+            severity="warning",
+            category="broker_reconcile_drift",
+            title="Broker reconcile drift detected",
+            message=message,
+            symbol=str(reconcile.get("symbol", "")),
+            timeframe=str(reconcile.get("timeframe", "")),
+            run_id=run_id,
+        )
+
     def broker_health(self, limit: int = 20) -> dict[str, object]:
         """查看最近 broker 快照是否过旧或最近一次已失败。"""
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
@@ -838,13 +894,13 @@ class QuantTradeApp:
                     cycle_id=cycle_id,
                 )
                 detail = repository.fetch_broker_sync_detail(sync_id=sync_id)
-            self._record_notification(
+            notification = self._record_notification(
                 severity="error",
                 category="broker_sync_failed",
                 title="Broker sync failed",
                 message=str(exc),
             )
-            return {"status": "failed", "detail": detail}
+            return {"status": "failed", "detail": detail, "notification": notification}
 
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
@@ -860,7 +916,8 @@ class QuantTradeApp:
                 cycle_id=cycle_id,
             )
             detail = repository.fetch_broker_sync_detail(sync_id=sync_id)
-        return {"status": "completed", "detail": detail}
+        notification = self._maybe_record_broker_reconcile_notification(limit=20)
+        return {"status": "completed", "detail": detail, "notification": notification}
 
     def live_run_cycle(
         self,
@@ -1354,7 +1411,9 @@ class QuantTradeApp:
                 bundle["notification_events"],
                 notification_assignment_sla_seconds=self.settings.notification.assignment_sla_seconds,
                 notification_assignment_sla_overrides=self._notification_assignment_sla_overrides(),
+                live_runner_stall_threshold_seconds=self._live_runner_stall_threshold_seconds(),
                 broker_max_snapshot_age_seconds=self.settings.broker.max_snapshot_age_seconds,
+                broker_reconcile_thresholds=self._broker_reconcile_thresholds(),
                 latest_run_detail=latest_run_detail,
                 latest_broker_sync_detail=latest_broker_sync_detail,
                 runtime_reconcile_preview=runtime_reconcile_preview,
