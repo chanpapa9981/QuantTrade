@@ -2140,6 +2140,122 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertGreaterEqual(health["summary"]["stale_execution_candidates"], 1)
         self.assertTrue(any(issue["code"] == "stale_execution_candidates" for issue in health["issues"]))
 
+    def test_controller_monitor_emits_notification_for_stalled_live_runner(self) -> None:
+        """验证 controller monitor 会把 stalled live runner 自动提升成通知。"""
+        base_dir = Path("var/test-artifacts/controller-monitor-stalled")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "controller-monitor-stalled.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 7, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(20):
+                current = start + timedelta(days=offset)
+                price += 0.9
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.4, 2),
+                        "high": round(price + 0.5, 2),
+                        "low": round(price - 0.8, 2),
+                        "close": round(price, 2),
+                        "volume": 2_150_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(
+            config_path,
+            db_path,
+            live_enabled=True,
+            live_runner_id="paper-runner",
+            live_poll_interval_seconds=30.0,
+            live_max_cycles_per_run=1,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+        cycle = app.live_run_cycle(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+        cycle_id = cycle["cycle"]["cycle_id"]
+
+        connection = connect_database(str(db_path))
+        try:
+            old_timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc).isoformat()
+            connection.execute(
+                """
+                UPDATE live_runner_cycles
+                SET started_at = ?, finished_at = ?
+                WHERE cycle_id = ?
+                """,
+                (old_timestamp, old_timestamp, cycle_id),
+            )
+        finally:
+            connection.close()
+
+        monitored = app.monitor_controller_health(runs_limit=5, events_limit=10)
+        recent_notifications = app.recent_notification_events(limit=5)
+
+        self.assertEqual(monitored["emitted_notifications"][0]["code"], "stalled_live_runner")
+        self.assertEqual(monitored["emitted_notifications"][0]["category"], "controller_stalled_live_runner")
+        self.assertEqual(monitored["emitted_notifications"][0]["notification"]["delivery_status"], "queued")
+        self.assertEqual(recent_notifications["notifications"][0]["category"], "controller_stalled_live_runner")
+        self.assertTrue(outbox_path.exists())
+
+    def test_controller_monitor_emits_notification_for_stale_broker_snapshot(self) -> None:
+        """验证 controller monitor 会把 stale broker snapshot 自动提升成通知。"""
+        base_dir = Path("var/test-artifacts/controller-monitor-stale-broker")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "controller-monitor-stale-broker.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        account_path, positions_path, orders_path = self._write_broker_snapshots(base_dir)
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(account_path),
+            broker_positions_snapshot_path=str(positions_path),
+            broker_orders_snapshot_path=str(orders_path),
+            broker_max_snapshot_age_seconds=60,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+
+        app = QuantTradeApp(str(config_path))
+        sync_result = app.broker_sync(runner_id="paper-runner")
+        sync_id = sync_result["detail"]["sync"]["sync_id"]
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                "UPDATE broker_syncs SET synced_at = ? WHERE sync_id = ?",
+                (datetime(2024, 1, 1, tzinfo=timezone.utc).isoformat(), sync_id),
+            )
+        finally:
+            connection.close()
+
+        monitored = app.monitor_controller_health(runs_limit=5, events_limit=10)
+        recent_notifications = app.recent_notification_events(limit=5)
+
+        self.assertEqual(monitored["emitted_notifications"][0]["code"], "stale_broker_snapshot")
+        self.assertEqual(monitored["emitted_notifications"][0]["category"], "controller_stale_broker_snapshot")
+        self.assertEqual(monitored["emitted_notifications"][0]["notification"]["delivery_status"], "queued")
+        self.assertEqual(recent_notifications["notifications"][0]["category"], "controller_stale_broker_snapshot")
+        self.assertTrue(outbox_path.exists())
+
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""
         base_dir = Path("var/test-artifacts/execution-blocked")

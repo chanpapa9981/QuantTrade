@@ -48,6 +48,34 @@ _NOTIFICATION_SEVERITY_RANK = {
     "critical": 40,
 }
 
+_CONTROLLER_HEALTH_NOTIFICATION_SPECS = {
+    "stalled_live_runner": {
+        "severity": "warning",
+        "category": "controller_stalled_live_runner",
+        "title": "Live runner stalled",
+    },
+    "failed_broker_sync": {
+        "severity": "critical",
+        "category": "controller_failed_broker_sync",
+        "title": "Broker sync failed",
+    },
+    "stale_broker_snapshot": {
+        "severity": "warning",
+        "category": "controller_stale_broker_snapshot",
+        "title": "Broker snapshot stale",
+    },
+    "unacknowledged_critical_notifications": {
+        "severity": "critical",
+        "category": "controller_unacknowledged_critical_alerts",
+        "title": "Critical alerts remain unacknowledged",
+    },
+    "sla_breached_notifications": {
+        "severity": "warning",
+        "category": "controller_sla_breach",
+        "title": "Notification SLA breached",
+    },
+}
+
 
 def _parse_csv_flag_set(raw_value: str) -> set[str]:
     """把逗号分隔配置解析成去重后的名称集合。"""
@@ -832,6 +860,131 @@ class QuantTradeApp:
             timeframe=str(reconcile.get("timeframe", "")),
             run_id=run_id,
         )
+
+    def _build_controller_health_notification_context(self, history_payload: dict[str, object]) -> dict[str, object]:
+        """把 controller monitor 需要的上下文整理出来，避免每个问题都自己扫一遍 payload。"""
+        return {
+            "stalled_runners": [item for item in history_payload.get("live_runner_summary", []) if item.get("stalled")],
+            "broker_health": dict(history_payload.get("broker_health", {})),
+            "critical_alerts": [
+                item
+                for item in history_payload.get("recent_notifications", [])
+                if item.get("severity") == "critical"
+                and not str(item.get("resolved_at", "")).strip()
+                and not str(item.get("acknowledged_at", "")).strip()
+            ],
+            "sla_breaches": list(history_payload.get("notification_sla_summary", [])),
+        }
+
+    def _build_controller_health_notification_message(
+        self,
+        *,
+        issue: dict[str, object],
+        history_payload: dict[str, object],
+        context: dict[str, object],
+    ) -> dict[str, object] | None:
+        """把 controller health issue 翻译成可发通知的结构。
+
+        这里的目标不是完整复制 health 面板，而是把最关键的排障线索压缩进一条消息：
+        让你看到通知时，就知道大概是哪类问题、数量多少、最值得先看的例子是什么。
+        """
+        code = str(issue.get("code", "")).strip()
+        spec = _CONTROLLER_HEALTH_NOTIFICATION_SPECS.get(code)
+        if not spec:
+            return None
+
+        symbol = ""
+        timeframe = ""
+        message = str(issue.get("detail", "")).strip()
+        if code == "stalled_live_runner":
+            stalled_runners = list(context.get("stalled_runners", []))[:3]
+            if stalled_runners:
+                symbol = str(stalled_runners[0].get("symbol", ""))
+                timeframe = str(stalled_runners[0].get("timeframe", ""))
+                runner_bits = [
+                    (
+                        f"{item.get('runner_id', '')}:{item.get('symbol', '')}/{item.get('timeframe', '')}"
+                        f" age={int(item.get('last_cycle_age_seconds', 0))}s"
+                    )
+                    for item in stalled_runners
+                ]
+                message = "stalled live runners detected; " + ", ".join(runner_bits)
+        elif code == "failed_broker_sync":
+            broker_health = dict(context.get("broker_health", {}))
+            message = (
+                "latest broker sync failed; "
+                f"sync_id={broker_health.get('latest_sync_id', '')}; "
+                f"provider={broker_health.get('latest_provider', '')}; "
+                f"detail={broker_health.get('detail', '')}"
+            )
+        elif code == "stale_broker_snapshot":
+            broker_health = dict(context.get("broker_health", {}))
+            message = (
+                "broker snapshot is stale; "
+                f"sync_id={broker_health.get('latest_sync_id', '')}; "
+                f"age={int(broker_health.get('snapshot_age_seconds', 0))}s; "
+                f"threshold={int(broker_health.get('max_snapshot_age_seconds', 0))}s"
+            )
+        elif code == "unacknowledged_critical_notifications":
+            critical_alerts = list(context.get("critical_alerts", []))[:3]
+            if critical_alerts:
+                symbol = str(critical_alerts[0].get("symbol", ""))
+                timeframe = str(critical_alerts[0].get("timeframe", ""))
+                alert_bits = [
+                    f"{item.get('event_id', '')}:{item.get('category', '')}"
+                    for item in critical_alerts
+                ]
+                message = "critical alerts remain unacknowledged; " + ", ".join(alert_bits)
+        elif code == "sla_breached_notifications":
+            sla_breaches = list(context.get("sla_breaches", []))[:3]
+            if sla_breaches:
+                owner_bits = [
+                    f"{item.get('owner', '')}:{item.get('event_id', '')}:{int(item.get('breach_seconds', 0))}s"
+                    for item in sla_breaches
+                ]
+                message = "notification SLA breached; " + ", ".join(owner_bits)
+
+        return {
+            "severity": str(spec["severity"]),
+            "category": str(spec["category"]),
+            "title": str(spec["title"]),
+            "message": message,
+            "symbol": symbol,
+            "timeframe": timeframe,
+        }
+
+    def monitor_controller_health(self, runs_limit: int = 20, events_limit: int = 50) -> dict[str, object]:
+        """扫描 controller health，并把关键问题自动提升成通知事件。
+
+        这个方法的定位更接近“巡检器”而不是“查询器”：
+        - `controller_health` 负责告诉你系统哪里有问题；
+        - `monitor_controller_health` 负责把最值得升级的问题主动写成通知。
+        """
+        history_payload = self.dashboard_history(runs_limit=runs_limit, events_limit=events_limit)
+        controller_health = history_payload["controller_health"]
+        context = self._build_controller_health_notification_context(history_payload)
+        emitted_notifications: list[dict[str, object]] = []
+        for issue in controller_health.get("issues", []):
+            payload = self._build_controller_health_notification_message(
+                issue=issue,
+                history_payload=history_payload,
+                context=context,
+            )
+            if payload is None:
+                continue
+            recorded = self._record_notification(**payload)
+            emitted_notifications.append(
+                {
+                    "code": str(issue.get("code", "")),
+                    "category": payload["category"],
+                    "title": payload["title"],
+                    "notification": recorded,
+                }
+            )
+        return {
+            "controller_health": controller_health,
+            "emitted_notifications": emitted_notifications,
+        }
 
     def broker_health(self, limit: int = 20) -> dict[str, object]:
         """查看最近 broker 快照是否过旧或最近一次已失败。"""

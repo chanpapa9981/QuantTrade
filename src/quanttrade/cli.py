@@ -150,6 +150,9 @@ def build_parser() -> argparse.ArgumentParser:
     controller_health_parser = subparsers.add_parser("controller-health", help="Show controller health summary and highest-priority issues")
     controller_health_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to include")
     controller_health_parser.add_argument("--events-limit", type=int, default=50, help="Number of recent events to inspect")
+    controller_monitor_parser = subparsers.add_parser("controller-monitor", help="Scan controller health and emit notification events for key issues")
+    controller_monitor_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to include")
+    controller_monitor_parser.add_argument("--events-limit", type=int, default=50, help="Number of recent events to inspect")
     history_parser = subparsers.add_parser("history", help="Build dashboard-ready historical summary")
     history_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to include")
     history_parser.add_argument("--events-limit", type=int, default=20, help="Number of order/audit events to include")
@@ -431,6 +434,16 @@ def main() -> None:
         print(
             json.dumps(
                 app.controller_health(runs_limit=args.runs_limit, events_limit=args.events_limit),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if args.command == "controller-monitor":
+        print(
+            json.dumps(
+                app.monitor_controller_health(runs_limit=args.runs_limit, events_limit=args.events_limit),
                 indent=2,
                 ensure_ascii=False,
             )

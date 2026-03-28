@@ -995,6 +995,18 @@
 | 未完成 | 进程级 heartbeat、跨进程 runner 失联检测、自动重启策略、市场时段感知的 stall 豁免、runner 级通知聚合 |
 | 备注 | 这一轮把 live runner 视图从“看状态”推进成了“看心跳”的更接近真实运维台形态 |
 
+### 2026-03-28 第 61 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把 controller health 从“人工查看面板”推进成“可主动巡检并自动升级关键问题”的巡检器 |
+| 输入 | 已有 `controller-health`、stalled runner、broker health、通知系统，但这些能力还没有真正接起来；如果 operator 不主动跑健康查询，就可能错过“runner 已停滞”或“broker 快照已过旧”这类没有直接报错的风险 |
+| 产出 | `controller-monitor` CLI；controller issue 到 notification 的规则映射；针对 `stalled_live_runner`、`failed_broker_sync`、`stale_broker_snapshot`、`unacknowledged_critical_notifications`、`sla_breached_notifications` 的自动通知；对应测试 |
+| 结果 | 现在系统不仅能列出 health issue，还能在巡检时自动把关键问题写成通知事件；这意味着 stalled runner 和 stale broker snapshot 这类“需要尽快知道，但不会自己跳出来”的问题，已经能进入统一告警队列 |
+| 为什么这么做 | 因为运维台的价值不只在于“有一个页面可以看”，还在于“就算你没盯着页面，系统也会把关键风险推到待处理队列里”。把 controller health 和 notification 真正接起来后，控制器才开始具备最基础的巡检器属性，而不只是一个静态观察面板。 |
+| 未完成 | 巡检任务自动调度、按 issue 类型做更细的通知静默策略、controller issue 聚合去重、巡检结果和 live runner 周期更深联动 |
+| 备注 | 这一轮把 controller health 从“会说哪里坏了”推进成了“会主动把坏消息抬出来”的更成熟运维骨架 |
+
 ---
 
 ## 10. 完整项目搭建观察框架
