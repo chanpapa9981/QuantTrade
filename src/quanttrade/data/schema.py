@@ -214,6 +214,7 @@ def create_schema(db_path: str) -> None:
 
             CREATE TABLE IF NOT EXISTS maintenance_cycles (
                 cycle_id TEXT PRIMARY KEY,
+                runner_id TEXT NOT NULL DEFAULT '',
                 started_at TEXT NOT NULL,
                 finished_at TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL,
@@ -227,12 +228,16 @@ def create_schema(db_path: str) -> None:
                 delivered_notification_count INTEGER NOT NULL DEFAULT 0,
                 delivery_failed_count INTEGER NOT NULL DEFAULT 0,
                 remaining_pending_notifications INTEGER NOT NULL DEFAULT 0,
+                broker_sync_status TEXT NOT NULL DEFAULT '',
+                broker_sync_id TEXT NOT NULL DEFAULT '',
                 cycle_note TEXT NOT NULL DEFAULT '',
                 error_message TEXT NOT NULL DEFAULT ''
             );
 
             CREATE INDEX IF NOT EXISTS idx_maintenance_cycles_started
             ON maintenance_cycles(started_at);
+            CREATE INDEX IF NOT EXISTS idx_maintenance_cycles_runner_started
+            ON maintenance_cycles(runner_id, started_at);
             """
         )
         # 历史版本数据库可能没有这些字段，所以这里用增量迁移方式自动补齐。
@@ -298,6 +303,7 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS error_message TEXT DEFAULT '';")
         connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS runner_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE broker_syncs ADD COLUMN IF NOT EXISTS cycle_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS runner_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS finished_at TEXT DEFAULT '';")
         connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'running';")
         connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS reconcile_runtime INTEGER DEFAULT 0;")
@@ -310,6 +316,8 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS delivered_notification_count INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS delivery_failed_count INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS remaining_pending_notifications INTEGER DEFAULT 0;")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS broker_sync_status TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS broker_sync_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS cycle_note TEXT DEFAULT '';")
         connection.execute("ALTER TABLE maintenance_cycles ADD COLUMN IF NOT EXISTS error_message TEXT DEFAULT '';")
     finally:

@@ -1274,9 +1274,11 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <thead>
                 <tr>
                   <th>Cycle ID</th>
+                  <th>Runner</th>
                   <th>Status</th>
                   <th>Started</th>
                   <th>Reconcile</th>
+                  <th>Broker Sync</th>
                   <th>Recovered Exec</th>
                   <th>Issues</th>
                   <th>Emitted</th>
@@ -1287,6 +1289,30 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                 </tr>
               </thead>
               <tbody id="maintenance-cycle-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Maintenance Runners</h2>
+          <div class="panel-note">Aggregated health view for maintenance polling loops and their latest cycle heartbeat</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Runner</th>
+                  <th>Latest</th>
+                  <th>Cycles</th>
+                  <th>Failed</th>
+                  <th>Cycle Age</th>
+                  <th>Stall Threshold</th>
+                  <th>Stalled</th>
+                  <th>Last Success</th>
+                  <th>Delivered Total</th>
+                  <th>Latest Pending</th>
+                </tr>
+              </thead>
+              <tbody id="maintenance-runner-table"></tbody>
             </table>
           </div>
         </section>
@@ -1618,6 +1644,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Maintenance Cycles", value: summary.total_maintenance_cycles }},
         {{ label: "Failed Maintenance", value: summary.failed_maintenance_cycles }},
         {{ label: "Last Maintenance", value: summary.latest_maintenance_status || "-" }},
+        {{ label: "Maintenance Runners", value: summary.maintenance_runners }},
+        {{ label: "Stalled Maintenance Runners", value: summary.stalled_maintenance_runners }},
         {{ label: "Broker Syncs", value: summary.total_broker_syncs }},
         {{ label: "Broker Sync Failed", value: summary.failed_broker_syncs }},
         {{ label: "Broker Stale", value: summary.stale_broker_syncs }},
@@ -1917,9 +1945,11 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("maintenance-cycle-table").innerHTML = maintenanceRows.length ? maintenanceRows.map(cycle => `
         <tr class="${{cycle.status === "failed" ? "row-anomaly" : ""}}">
           <td>${{cycle.cycle_id}}</td>
+          <td>${{cycle.runner_id || ""}}</td>
           <td>${{cycle.status}}</td>
           <td>${{cycle.started_at || ""}}</td>
           <td>${{cycle.reconcile_runtime ? "yes" : "no"}}</td>
+          <td>${{cycle.broker_sync_status || "-"}}</td>
           <td>${{fmt(cycle.recovered_stale_executions)}}</td>
           <td>${{fmt(cycle.controller_issue_count)}}</td>
           <td>${{fmt(cycle.emitted_notification_count)}}</td>
@@ -1928,7 +1958,22 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(cycle.remaining_pending_notifications)}}</td>
           <td>${{cycle.cycle_note || cycle.error_message || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="11" class="muted">No maintenance cycles in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="13" class="muted">No maintenance cycles in the current view.</td></tr>';
+      const maintenanceRunnerRows = payload.maintenance_runner_summary || [];
+      document.getElementById("maintenance-runner-table").innerHTML = maintenanceRunnerRows.length ? maintenanceRunnerRows.map(row => `
+        <tr class="${{row.stalled || row.latest_status === "failed" ? "row-anomaly" : ""}}">
+          <td>${{row.runner_id}}</td>
+          <td>${{row.latest_status}}</td>
+          <td>${{fmt(row.cycle_count)}}</td>
+          <td>${{fmt(row.failed_count)}}</td>
+          <td>${{fmt(row.last_cycle_age_seconds)}}</td>
+          <td>${{fmt(row.stall_threshold_seconds)}}</td>
+          <td>${{row.stalled ? "yes" : "no"}}</td>
+          <td>${{row.last_success_at || ""}}</td>
+          <td>${{fmt(row.total_delivered_notifications)}}</td>
+          <td>${{fmt(row.latest_pending_notifications)}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="10" class="muted">No maintenance runner summary rows in the current view.</td></tr>';
     }}
     function renderExecutionDetail() {{
       // 详情面板把一次执行尝试的“控制器级状态”摊开，便于判断是否要继续追订单层。

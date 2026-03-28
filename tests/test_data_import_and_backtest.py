@@ -57,6 +57,12 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         live_runner_id: str = "local-default",
         live_poll_interval_seconds: float = 0.0,
         live_max_cycles_per_run: int = 1,
+        maintenance_enabled: bool = False,
+        maintenance_runner_id: str = "maintenance-default",
+        maintenance_poll_interval_seconds: float = 300.0,
+        maintenance_max_cycles_per_run: int = 1,
+        maintenance_runs_limit: int = 20,
+        maintenance_events_limit: int = 50,
         broker_enabled: bool = False,
         broker_provider: str = "local_file",
         broker_account_snapshot_path: str = "var/broker/account.json",
@@ -102,6 +108,13 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  runner_id: {live_runner_id}",
                     f"  poll_interval_seconds: {live_poll_interval_seconds}",
                     f"  max_cycles_per_run: {live_max_cycles_per_run}",
+                    "maintenance:",
+                    f"  enabled: {'true' if maintenance_enabled else 'false'}",
+                    f"  runner_id: {maintenance_runner_id}",
+                    f"  poll_interval_seconds: {maintenance_poll_interval_seconds}",
+                    f"  max_cycles_per_run: {maintenance_max_cycles_per_run}",
+                    f"  runs_limit: {maintenance_runs_limit}",
+                    f"  events_limit: {maintenance_events_limit}",
                     "broker:",
                     f"  enabled: {'true' if broker_enabled else 'false'}",
                     f"  provider: {broker_provider}",
@@ -396,6 +409,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("stalled_live_runners", history_payload["history_summary"])
         self.assertIn("live_runner_summary", history_payload)
         self.assertIn("recent_maintenance_cycles", history_payload)
+        self.assertIn("maintenance_runners", history_payload["history_summary"])
+        self.assertIn("stalled_maintenance_runners", history_payload["history_summary"])
+        self.assertIn("maintenance_runner_summary", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""
@@ -2319,15 +2335,169 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         detail = app.maintenance_cycle_detail(cycle_id=result["cycle"]["cycle_id"])["cycle"]
 
         self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["runner_id"], "maintenance-default")
         self.assertEqual(result["cycle"]["status"], "completed")
+        self.assertEqual(result["cycle"]["runner_id"], "maintenance-default")
+        self.assertEqual(result["cycle"]["broker_sync_status"], "disabled")
         self.assertGreaterEqual(result["reconcile"]["recovered_stale_executions"], 1)
         self.assertGreaterEqual(result["delivery"]["dispatched"], 1)
         self.assertGreaterEqual(result["escalation"]["escalated"], 1)
         self.assertEqual(recent_cycles[0]["cycle_id"], result["cycle"]["cycle_id"])
         self.assertEqual(detail["cycle_id"], result["cycle"]["cycle_id"])
+        self.assertEqual(detail["runner_id"], "maintenance-default")
         self.assertTrue(detail["reconcile_runtime"])
         self.assertGreaterEqual(detail["recovered_stale_executions"], 1)
         self.assertGreaterEqual(detail["delivered_notification_count"], 1)
+
+    def test_maintenance_run_once_records_broker_sync_when_enabled(self) -> None:
+        """验证 maintenance cycle 在 broker 已启用时会顺手刷新快照并把结果记进账本。"""
+        base_dir = Path("var/test-artifacts/maintenance-cycle-broker-sync")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "maintenance-cycle-broker-sync.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        account_path, positions_path, orders_path = self._write_broker_snapshots(base_dir)
+        self._write_config(
+            config_path,
+            db_path,
+            broker_enabled=True,
+            broker_account_snapshot_path=str(account_path),
+            broker_positions_snapshot_path=str(positions_path),
+            broker_orders_snapshot_path=str(orders_path),
+        )
+        app = QuantTradeApp(str(config_path))
+
+        result = app.maintenance_run_once(runs_limit=5, events_limit=10, runner_id="ops-runner")
+        detail = app.maintenance_cycle_detail(cycle_id=result["cycle"]["cycle_id"])["cycle"]
+        recent_syncs = app.recent_broker_syncs(limit=5)["broker_syncs"]
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["broker_sync"]["status"], "completed")
+        self.assertEqual(detail["broker_sync_status"], "completed")
+        self.assertTrue(detail["broker_sync_id"])
+        self.assertEqual(recent_syncs[0]["cycle_id"], result["cycle"]["cycle_id"])
+        self.assertEqual(recent_syncs[0]["runner_id"], "ops-runner")
+
+    def test_maintenance_runner_runs_multiple_cycles(self) -> None:
+        """验证 maintenance runner 会按同一个 runner_id 连续落多条维护周期。"""
+        base_dir = Path("var/test-artifacts/maintenance-runner")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "maintenance-runner.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            maintenance_enabled=True,
+            maintenance_runner_id="ops-runner",
+            maintenance_poll_interval_seconds=0.0,
+            maintenance_max_cycles_per_run=2,
+            maintenance_runs_limit=5,
+            maintenance_events_limit=10,
+        )
+        app = QuantTradeApp(str(config_path))
+
+        result = app.run_maintenance_runner(cycles=2, runner_id="ops-runner", runs_limit=5, events_limit=10)
+        recent_cycles = app.recent_maintenance_cycles(limit=5)["maintenance_cycles"]
+
+        self.assertEqual(result["runner_id"], "ops-runner")
+        self.assertEqual(result["cycles_requested"], 2)
+        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual(result["results"][0]["runner_id"], "ops-runner")
+        self.assertEqual(result["results"][1]["runner_id"], "ops-runner")
+        self.assertEqual(recent_cycles[0]["runner_id"], "ops-runner")
+        self.assertEqual(recent_cycles[1]["runner_id"], "ops-runner")
+        self.assertNotEqual(recent_cycles[0]["cycle_id"], recent_cycles[1]["cycle_id"])
+
+    def test_maintenance_runner_status_flags_stalled_runner(self) -> None:
+        """验证 maintenance runner 在超过两个维护 poll interval 后会被标记为 stalled。"""
+        base_dir = Path("var/test-artifacts/maintenance-runner-stalled")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "maintenance-runner-stalled.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            maintenance_enabled=True,
+            maintenance_runner_id="ops-runner",
+            maintenance_poll_interval_seconds=30.0,
+            maintenance_max_cycles_per_run=1,
+        )
+        app = QuantTradeApp(str(config_path))
+        result = app.maintenance_run_once(runs_limit=5, events_limit=10, runner_id="ops-runner")
+        cycle_id = result["cycle"]["cycle_id"]
+        old_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                "UPDATE maintenance_cycles SET started_at = ?, finished_at = ? WHERE cycle_id = ?",
+                (old_timestamp, old_timestamp, cycle_id),
+            )
+        finally:
+            connection.close()
+
+        status = app.maintenance_runner_status(limit=10)
+        controller_health = app.controller_health(runs_limit=5, events_limit=10)["controller_health"]
+
+        self.assertEqual(status["summary"][0]["runner_id"], "ops-runner")
+        self.assertTrue(status["summary"][0]["stalled"])
+        self.assertEqual(status["summary"][0]["stall_threshold_seconds"], 60.0)
+        self.assertIn("stalled_maintenance_runner", [item["code"] for item in controller_health["issues"]])
+
+    def test_controller_monitor_emits_notification_for_stalled_maintenance_runner(self) -> None:
+        """验证 controller monitor 会把 stalled maintenance runner 自动提升成通知。"""
+        base_dir = Path("var/test-artifacts/controller-monitor-stalled-maintenance")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "controller-monitor-stalled-maintenance.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            maintenance_enabled=True,
+            maintenance_runner_id="ops-runner",
+            maintenance_poll_interval_seconds=30.0,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        result = app.maintenance_run_once(runs_limit=5, events_limit=10, runner_id="ops-runner")
+        cycle_id = result["cycle"]["cycle_id"]
+        old_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                "UPDATE maintenance_cycles SET started_at = ?, finished_at = ? WHERE cycle_id = ?",
+                (old_timestamp, old_timestamp, cycle_id),
+            )
+        finally:
+            connection.close()
+
+        monitored = app.monitor_controller_health(runs_limit=5, events_limit=10)
+        recent_notifications = app.recent_notification_events(limit=5)
+
+        self.assertEqual(monitored["emitted_notifications"][0]["code"], "stalled_maintenance_runner")
+        self.assertEqual(
+            monitored["emitted_notifications"][0]["category"],
+            "controller_stalled_maintenance_runner",
+        )
+        self.assertEqual(monitored["emitted_notifications"][0]["notification"]["delivery_status"], "queued")
+        self.assertEqual(recent_notifications["notifications"][0]["category"], "controller_stalled_maintenance_runner")
+        self.assertTrue(outbox_path.exists())
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

@@ -74,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance_run_once_parser = subparsers.add_parser("maintenance-run-once", help="Run one controller maintenance cycle")
     maintenance_run_once_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to inspect during controller monitoring")
     maintenance_run_once_parser.add_argument("--events-limit", type=int, default=50, help="Number of recent events to inspect during maintenance")
+    maintenance_run_once_parser.add_argument("--runner-id", default="", help="Optional maintenance runner identifier")
+    maintenance_runner_parser = subparsers.add_parser("maintenance-runner", help="Run multiple maintenance cycles in sequence")
+    maintenance_runner_parser.add_argument("--runner-id", default="", help="Optional maintenance runner identifier")
+    maintenance_runner_parser.add_argument("--cycles", type=int, help="How many maintenance cycles to run in this foreground session")
+    maintenance_runner_parser.add_argument("--runs-limit", type=int, help="Number of runs to inspect during controller monitoring")
+    maintenance_runner_parser.add_argument("--events-limit", type=int, help="Number of recent events to inspect during maintenance")
+    maintenance_runner_status_parser = subparsers.add_parser("maintenance-runner-status", help="Show aggregated maintenance runner status rows")
+    maintenance_runner_status_parser.add_argument("--limit", type=int, default=20, help="Number of recent maintenance cycles to inspect")
     maintenance_cycles_parser = subparsers.add_parser("maintenance-cycles", help="List recent controller maintenance cycles")
     maintenance_cycles_parser.add_argument("--limit", type=int, default=20, help="Number of maintenance cycles to list")
     maintenance_cycle_detail_parser = subparsers.add_parser("maintenance-cycle-detail", help="Show one controller maintenance cycle detail")
@@ -309,11 +317,34 @@ def main() -> None:
     if args.command == "maintenance-run-once":
         print(
             json.dumps(
-                app.maintenance_run_once(runs_limit=args.runs_limit, events_limit=args.events_limit),
+                app.maintenance_run_once(
+                    runs_limit=args.runs_limit,
+                    events_limit=args.events_limit,
+                    runner_id=args.runner_id,
+                ),
                 indent=2,
                 ensure_ascii=False,
             )
         )
+        return
+
+    if args.command == "maintenance-runner":
+        print(
+            json.dumps(
+                app.run_maintenance_runner(
+                    runner_id=args.runner_id,
+                    cycles=args.cycles,
+                    runs_limit=args.runs_limit,
+                    events_limit=args.events_limit,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if args.command == "maintenance-runner-status":
+        print(json.dumps(app.maintenance_runner_status(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "maintenance-cycles":

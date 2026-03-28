@@ -14,6 +14,7 @@ from quanttrade.config.models import (
     DataConfig,
     ExecutionConfig,
     LiveConfig,
+    MaintenanceConfig,
     NotificationConfig,
     RiskConfig,
     Settings,
@@ -108,6 +109,7 @@ def load_settings(path: str | Path) -> Settings:
         data=DataConfig(**_section(payload, "data")),
         execution=ExecutionConfig(**_section(payload, "execution")),
         live=LiveConfig(**_section(payload, "live")),
+        maintenance=MaintenanceConfig(**_section(payload, "maintenance")),
         broker=BrokerConfig(**_section(payload, "broker")),
         notification=NotificationConfig(**_section(payload, "notification")),
     )

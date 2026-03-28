@@ -110,6 +110,18 @@ class LiveConfig:
 
 
 @dataclass(slots=True)
+class MaintenanceConfig:
+    """控制器维护 runner 配置。"""
+
+    enabled: bool = False
+    runner_id: str = "maintenance-default"
+    poll_interval_seconds: float = 300.0
+    max_cycles_per_run: int = 1
+    runs_limit: int = 20
+    events_limit: int = 50
+
+
+@dataclass(slots=True)
 class BrokerConfig:
     """券商只读同步配置。"""
 
@@ -135,5 +147,6 @@ class Settings:
     data: DataConfig = field(default_factory=DataConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
+    maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
     broker: BrokerConfig = field(default_factory=BrokerConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)

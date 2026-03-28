@@ -1892,21 +1892,24 @@ class BacktestRunRepository:
         """把 maintenance cycle 查询结果统一转换成字典。"""
         return {
             "cycle_id": row[0],
-            "started_at": row[1],
-            "finished_at": row[2],
-            "status": row[3],
-            "reconcile_runtime": bool(row[4]),
-            "repaired_assignment_timestamps": row[5],
-            "repaired_resolution_acknowledgements": row[6],
-            "recovered_stale_executions": row[7],
-            "controller_issue_count": row[8],
-            "emitted_notification_count": row[9],
-            "escalated_notification_count": row[10],
-            "delivered_notification_count": row[11],
-            "delivery_failed_count": row[12],
-            "remaining_pending_notifications": row[13],
-            "cycle_note": row[14],
-            "error_message": row[15],
+            "runner_id": row[1],
+            "started_at": row[2],
+            "finished_at": row[3],
+            "status": row[4],
+            "reconcile_runtime": bool(row[5]),
+            "repaired_assignment_timestamps": row[6],
+            "repaired_resolution_acknowledgements": row[7],
+            "recovered_stale_executions": row[8],
+            "controller_issue_count": row[9],
+            "emitted_notification_count": row[10],
+            "escalated_notification_count": row[11],
+            "delivered_notification_count": row[12],
+            "delivery_failed_count": row[13],
+            "remaining_pending_notifications": row[14],
+            "broker_sync_status": row[15],
+            "broker_sync_id": row[16],
+            "cycle_note": row[17],
+            "error_message": row[18],
         }
 
     def create_live_cycle(
@@ -2083,7 +2086,7 @@ class BacktestRunRepository:
             return None
         return self._live_cycle_row_to_dict(row)
 
-    def create_maintenance_cycle(self, *, reconcile_runtime: bool) -> str:
+    def create_maintenance_cycle(self, *, runner_id: str, reconcile_runtime: bool) -> str:
         """创建一条新的维护周期记录。"""
         connection = connect_database(self.db_path)
         cycle_id = str(uuid4())
@@ -2092,15 +2095,16 @@ class BacktestRunRepository:
             connection.execute(
                 """
                 INSERT INTO maintenance_cycles (
-                    cycle_id, started_at, finished_at, status, reconcile_runtime,
+                    cycle_id, runner_id, started_at, finished_at, status, reconcile_runtime,
                     repaired_assignment_timestamps, repaired_resolution_acknowledgements, recovered_stale_executions,
                     controller_issue_count, emitted_notification_count, escalated_notification_count,
                     delivered_notification_count, delivery_failed_count, remaining_pending_notifications,
-                    cycle_note, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    broker_sync_status, broker_sync_id, cycle_note, error_message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cycle_id,
+                    runner_id[:120],
                     started_at,
                     "",
                     "running",
@@ -2114,6 +2118,8 @@ class BacktestRunRepository:
                     0,
                     0,
                     0,
+                    "",
+                    "",
                     "",
                     "",
                 ),
@@ -2137,6 +2143,8 @@ class BacktestRunRepository:
         delivered_notification_count: int = 0,
         delivery_failed_count: int = 0,
         remaining_pending_notifications: int = 0,
+        broker_sync_status: str = "",
+        broker_sync_id: str = "",
         cycle_note: str = "",
         error_message: str = "",
     ) -> None:
@@ -2158,6 +2166,8 @@ class BacktestRunRepository:
                     delivered_notification_count = ?,
                     delivery_failed_count = ?,
                     remaining_pending_notifications = ?,
+                    broker_sync_status = ?,
+                    broker_sync_id = ?,
                     cycle_note = ?,
                     error_message = ?
                 WHERE cycle_id = ?
@@ -2175,6 +2185,8 @@ class BacktestRunRepository:
                     max(int(delivered_notification_count), 0),
                     max(int(delivery_failed_count), 0),
                     max(int(remaining_pending_notifications), 0),
+                    broker_sync_status[:40],
+                    broker_sync_id[:80],
                     cycle_note[:500],
                     error_message[:500],
                     cycle_id[:80],
@@ -2192,11 +2204,11 @@ class BacktestRunRepository:
                 return []
             rows = connection.execute(
                 """
-                SELECT cycle_id, started_at, finished_at, status, reconcile_runtime,
+                SELECT cycle_id, runner_id, started_at, finished_at, status, reconcile_runtime,
                        repaired_assignment_timestamps, repaired_resolution_acknowledgements, recovered_stale_executions,
                        controller_issue_count, emitted_notification_count, escalated_notification_count,
                        delivered_notification_count, delivery_failed_count, remaining_pending_notifications,
-                       cycle_note, error_message
+                       broker_sync_status, broker_sync_id, cycle_note, error_message
                 FROM maintenance_cycles
                 ORDER BY started_at DESC
                 LIMIT ?
@@ -2216,11 +2228,11 @@ class BacktestRunRepository:
                 return None
             row = connection.execute(
                 """
-                SELECT cycle_id, started_at, finished_at, status, reconcile_runtime,
+                SELECT cycle_id, runner_id, started_at, finished_at, status, reconcile_runtime,
                        repaired_assignment_timestamps, repaired_resolution_acknowledgements, recovered_stale_executions,
                        controller_issue_count, emitted_notification_count, escalated_notification_count,
                        delivered_notification_count, delivery_failed_count, remaining_pending_notifications,
-                       cycle_note, error_message
+                       broker_sync_status, broker_sync_id, cycle_note, error_message
                 FROM maintenance_cycles
                 WHERE cycle_id = ?
                 """,
@@ -2640,11 +2652,11 @@ class BacktestRunRepository:
             if "maintenance_cycles" in table_names:
                 maintenance_rows = connection.execute(
                     """
-                    SELECT cycle_id, started_at, finished_at, status, reconcile_runtime,
+                    SELECT cycle_id, runner_id, started_at, finished_at, status, reconcile_runtime,
                            repaired_assignment_timestamps, repaired_resolution_acknowledgements, recovered_stale_executions,
                            controller_issue_count, emitted_notification_count, escalated_notification_count,
                            delivered_notification_count, delivery_failed_count, remaining_pending_notifications,
-                           cycle_note, error_message
+                           broker_sync_status, broker_sync_id, cycle_note, error_message
                     FROM maintenance_cycles
                     ORDER BY started_at DESC
                     LIMIT ?

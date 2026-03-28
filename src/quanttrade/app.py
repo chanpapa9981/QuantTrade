@@ -54,6 +54,11 @@ _CONTROLLER_HEALTH_NOTIFICATION_SPECS = {
         "category": "controller_stalled_live_runner",
         "title": "Live runner stalled",
     },
+    "stalled_maintenance_runner": {
+        "severity": "warning",
+        "category": "controller_stalled_maintenance_runner",
+        "title": "Maintenance runner stalled",
+    },
     "failed_broker_sync": {
         "severity": "critical",
         "category": "controller_failed_broker_sync",
@@ -112,6 +117,7 @@ class QuantTradeApp:
             "data_backend": self.settings.data.backend,
             "execution": asdict(self.settings.execution),
             "live": asdict(self.settings.live),
+            "maintenance": asdict(self.settings.maintenance),
             "broker": asdict(self.settings.broker),
             "notification": asdict(self.settings.notification),
         }
@@ -183,6 +189,14 @@ class QuantTradeApp:
             return normalized
         fallback = str(self.settings.live.runner_id or "").strip()
         return fallback or "local-default"
+
+    def _effective_maintenance_runner_id(self, runner_id: str = "") -> str:
+        """返回本次 maintenance cycle 应该使用的 runner 标识。"""
+        normalized = str(runner_id or "").strip()
+        if normalized:
+            return normalized
+        fallback = str(self.settings.maintenance.runner_id or "").strip()
+        return fallback or "maintenance-default"
 
     def _classify_execution_error(self, exc: Exception) -> dict[str, object]:
         """把一次执行异常翻译成运行控制器可理解的决策信息。
@@ -256,6 +270,13 @@ class QuantTradeApp:
         那它至少值得被拉进健康视图里提醒 operator 看一眼。
         """
         poll_interval_seconds = max(float(self.settings.live.poll_interval_seconds), 0.0)
+        if poll_interval_seconds <= 0:
+            return 0.0
+        return poll_interval_seconds * 2.0
+
+    def _maintenance_runner_stall_threshold_seconds(self) -> float:
+        """返回 maintenance runner 被视为“停滞”的时间阈值。"""
+        poll_interval_seconds = max(float(self.settings.maintenance.poll_interval_seconds), 0.0)
         if poll_interval_seconds <= 0:
             return 0.0
         return poll_interval_seconds * 2.0
@@ -865,6 +886,9 @@ class QuantTradeApp:
         """把 controller monitor 需要的上下文整理出来，避免每个问题都自己扫一遍 payload。"""
         return {
             "stalled_runners": [item for item in history_payload.get("live_runner_summary", []) if item.get("stalled")],
+            "stalled_maintenance_runners": [
+                item for item in history_payload.get("maintenance_runner_summary", []) if item.get("stalled")
+            ],
             "broker_health": dict(history_payload.get("broker_health", {})),
             "critical_alerts": [
                 item
@@ -909,6 +933,18 @@ class QuantTradeApp:
                     for item in stalled_runners
                 ]
                 message = "stalled live runners detected; " + ", ".join(runner_bits)
+        elif code == "stalled_maintenance_runner":
+            stalled_maintenance_runners = list(context.get("stalled_maintenance_runners", []))[:3]
+            if stalled_maintenance_runners:
+                runner_bits = [
+                    (
+                        f"{item.get('runner_id', '')}:"
+                        f" age={int(item.get('last_cycle_age_seconds', 0))}s"
+                        f" failed={int(item.get('failed_count', 0))}"
+                    )
+                    for item in stalled_maintenance_runners
+                ]
+                message = "stalled maintenance runners detected; " + ", ".join(runner_bits)
         elif code == "failed_broker_sync":
             broker_health = dict(context.get("broker_health", {}))
             message = (
@@ -1243,6 +1279,11 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"maintenance_cycles": repository.fetch_recent_maintenance_cycles(limit=limit)}
 
+    def maintenance_runner_status(self, limit: int = 20) -> dict[str, object]:
+        """查看 maintenance runner 汇总状态。"""
+        history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
+        return {"summary": history_payload["maintenance_runner_summary"]}
+
     def maintenance_cycle_detail(self, cycle_id: str) -> dict[str, object]:
         """查看单个维护周期的完整详情。"""
         with database_lock(self.settings.data.duckdb_path):
@@ -1250,7 +1291,12 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"cycle": repository.fetch_maintenance_cycle_detail(cycle_id=cycle_id)}
 
-    def maintenance_run_once(self, runs_limit: int = 20, events_limit: int = 50) -> dict[str, object]:
+    def maintenance_run_once(
+        self,
+        runs_limit: int | None = None,
+        events_limit: int | None = None,
+        runner_id: str = "",
+    ) -> dict[str, object]:
         """执行一次完整的控制器维护周期。
 
         这个维护周期会把目前已经做好的几条运维能力串成一次真正的“值班节拍”：
@@ -1259,20 +1305,38 @@ class QuantTradeApp:
         3. 再跑通知升级和投递；
         4. 最后把这次维护做了什么持久化下来。
         """
+        effective_runner_id = self._effective_maintenance_runner_id(runner_id)
+        effective_runs_limit = max(int(runs_limit or self.settings.maintenance.runs_limit), 1)
+        effective_events_limit = max(int(events_limit or self.settings.maintenance.events_limit), 1)
         with database_lock(self.settings.data.duckdb_path):
             create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
-            cycle_id = repository.create_maintenance_cycle(reconcile_runtime=True)
+            cycle_id = repository.create_maintenance_cycle(
+                runner_id=effective_runner_id,
+                reconcile_runtime=True,
+            )
 
         try:
             reconcile_result = self.reconcile_runtime_state()
-            monitor_result = self.monitor_controller_health(runs_limit=runs_limit, events_limit=events_limit)
-            escalation_result = self.escalate_notifications(limit=events_limit)
-            delivery_result = self.deliver_notifications(limit=events_limit)
+            broker_sync_result: dict[str, object] = {
+                "status": "disabled",
+                "message": "broker sync is disabled in config",
+            }
+            if bool(self.settings.broker.enabled):
+                broker_sync_result = self.broker_sync(runner_id=effective_runner_id, cycle_id=cycle_id)
+            monitor_result = self.monitor_controller_health(
+                runs_limit=effective_runs_limit,
+                events_limit=effective_events_limit,
+            )
+            escalation_result = self.escalate_notifications(limit=effective_events_limit)
+            delivery_result = self.deliver_notifications(limit=effective_events_limit)
             controller_health = monitor_result["controller_health"]
             emitted_notifications = monitor_result["emitted_notifications"]
+            broker_sync_detail = dict(broker_sync_result.get("detail", {}) or {})
+            broker_sync_summary = dict(broker_sync_detail.get("sync", {}) or {})
             cycle_note = (
                 "maintenance cycle completed; "
+                f"broker_sync={broker_sync_result.get('status', '')}; "
                 f"issues={len(controller_health.get('issues', []))}; "
                 f"emitted={len(emitted_notifications)}; "
                 f"escalated={int(escalation_result.get('escalated', 0))}; "
@@ -1296,13 +1360,17 @@ class QuantTradeApp:
                         + int(delivery_result.get("failed_final", 0))
                     ),
                     remaining_pending_notifications=int(delivery_result.get("remaining_pending", 0)),
+                    broker_sync_status=str(broker_sync_result.get("status", "")),
+                    broker_sync_id=str(broker_sync_summary.get("sync_id", "")),
                     cycle_note=cycle_note,
                 )
                 detail = repository.fetch_maintenance_cycle_detail(cycle_id=cycle_id)
             return {
                 "status": "completed",
+                "runner_id": effective_runner_id,
                 "cycle": detail,
                 "reconcile": reconcile_result,
+                "broker_sync": broker_sync_result,
                 "monitor": monitor_result,
                 "escalation": escalation_result,
                 "delivery": delivery_result,
@@ -1326,9 +1394,40 @@ class QuantTradeApp:
             )
             return {
                 "status": "failed",
+                "runner_id": effective_runner_id,
                 "cycle": detail,
                 "error_message": str(exc),
             }
+
+    def run_maintenance_runner(
+        self,
+        *,
+        runner_id: str = "",
+        cycles: int | None = None,
+        runs_limit: int | None = None,
+        events_limit: int | None = None,
+    ) -> dict[str, object]:
+        """按配置或调用参数连续执行多轮 maintenance cycle。"""
+        effective_runner_id = self._effective_maintenance_runner_id(runner_id)
+        cycle_limit = max(int(cycles or self.settings.maintenance.max_cycles_per_run), 1)
+        poll_interval_seconds = max(float(self.settings.maintenance.poll_interval_seconds), 0.0)
+        results: list[dict[str, object]] = []
+        for index in range(cycle_limit):
+            results.append(
+                self.maintenance_run_once(
+                    runs_limit=runs_limit,
+                    events_limit=events_limit,
+                    runner_id=effective_runner_id,
+                )
+            )
+            if index < cycle_limit - 1 and poll_interval_seconds > 0:
+                time.sleep(poll_interval_seconds)
+        return {
+            "runner_id": effective_runner_id,
+            "cycles_requested": cycle_limit,
+            "poll_interval_seconds": poll_interval_seconds,
+            "results": results,
+        }
 
     def notification_summary(self, limit: int = 50) -> dict[str, object]:
         """汇总最近通知事件，方便快速看近况而不是逐条翻告警。"""
@@ -1660,6 +1759,7 @@ class QuantTradeApp:
                 notification_assignment_sla_seconds=self.settings.notification.assignment_sla_seconds,
                 notification_assignment_sla_overrides=self._notification_assignment_sla_overrides(),
                 live_runner_stall_threshold_seconds=self._live_runner_stall_threshold_seconds(),
+                maintenance_runner_stall_threshold_seconds=self._maintenance_runner_stall_threshold_seconds(),
                 broker_max_snapshot_age_seconds=self.settings.broker.max_snapshot_age_seconds,
                 broker_reconcile_thresholds=self._broker_reconcile_thresholds(),
                 latest_run_detail=latest_run_detail,

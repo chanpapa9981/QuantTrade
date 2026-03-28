@@ -1019,6 +1019,30 @@
 | 未完成 | 定时调度 maintenance cycle、maintenance cycle 与 live runner 自动联动、按 maintenance 失败自动重试、maintenance KPI 趋势页 |
 | 备注 | 这一轮把运维能力从“命令集合”推进成了“有节拍、有账本”的维护骨架 |
 
+### 2026-03-28 第 63 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 maintenance cycle 从“有账本”继续进化成“有 runner 心跳、有停滞识别、能主动告警”的维护巡检器 |
+| 输入 | 已有 `maintenance-run-once` 和 `maintenance_cycles` 账本，但系统仍然缺少一个关键问题判断：维护流程是不是已经太久没再跑，导致 reconcile、monitor、deliver 整条运维链悄悄停住了 |
+| 产出 | `maintenance` 配置分组；`runner_id` 进入 maintenance cycle 持久化；`maintenance-runner` / `maintenance-runner-status` CLI；maintenance runner summary；`stalled_maintenance_runner` controller issue；history 页 `Maintenance Runners / Stalled Maintenance Runners` 视图；controller monitor 对 stalled maintenance runner 的自动通知；对应测试 |
+| 结果 | 现在系统不仅能记录“某次维护做了什么”，还能回答“哪个 maintenance runner 还活着、最近一次心跳是什么时候、是不是已经超过两个 poll interval 没再产生新 cycle”；如果 maintenance runner 停滞，controller monitor 还会自动把这件事抬进通知队列 |
+| 为什么这么做 | 因为真正的运维骨架不能只记录“上一次维护做了什么”，还必须持续确认“维护器本身还在不在工作”。否则最危险的情况就是所有巡检逻辑都停了，但页面上只剩一条很久以前的成功记录，看起来像没问题。把 runner 心跳、停滞判断和自动告警接起来后，maintenance 子系统才真正具备了自我监控能力。 |
+| 未完成 | maintenance runner 常驻后台调度、按市场时段调整 stall 阈值、maintenance runner 自动重启、maintenance KPI 趋势图、跨 runner 分工 |
+| 备注 | 这一轮把 maintenance 从“记一次值班”推进成了“持续确认值班器还活着”的更接近真实运维系统的形态 |
+
+### 2026-03-28 第 64 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 maintenance cycle 不只做本地巡检，还能把 broker 快照刷新也纳入同一次维护节拍 |
+| 输入 | 已有 broker sync、maintenance cycle、controller health，但 maintenance 账本里仍然看不出“这次维护有没有顺手刷新 broker、刷新是否成功、和哪次 sync 对应” |
+| 产出 | `maintenance_cycles` 增加 `broker_sync_status / broker_sync_id`；`maintenance-run-once` 在 broker 已启用时自动执行 `broker_sync` 并把结果记入 cycle；历史页 `Recent Maintenance Cycles` 增加 `Runner / Broker Sync` 列；对应测试 |
+| 结果 | 现在一次 maintenance cycle 不再只是“修脏状态、巡检、升级、投递”，还会在 broker 已启用时顺手刷新最新快照，并把这次刷新是否成功、对应哪条 broker sync 一起记进维护账本；后面排查时可以直接从 maintenance cycle 反查它驱动了哪次外部快照更新 |
+| 为什么这么做 | 因为真实值班节拍通常不会把“运维巡检”和“外部状态刷新”完全割裂。只要系统准备依赖 broker 快照做健康判断，就应该让维护周期显式负责把这份快照刷新到最新，并留下可追溯记录。这样 maintenance 才不是只检查旧状态，而是在主动推动系统回到更新后的真实状态。 |
+| 未完成 | broker sync 失败后的 maintenance 重试策略、按 provider 区分维护动作、maintenance 与 live runner 的更细调度协作、真实 Schwab 同步接入 |
+| 备注 | 这一轮把 maintenance cycle 从“内部巡检账本”推进成了“带外部快照刷新动作”的更完整维护节拍 |
+
 ---
 
 ## 10. 完整项目搭建观察框架

@@ -278,6 +278,7 @@ def _build_controller_health(
     *,
     execution_requests: list[dict[str, object]],
     live_runner_summary: list[dict[str, object]],
+    maintenance_runner_summary: list[dict[str, object]],
     broker_health: dict[str, object],
     broker_reconcile: dict[str, object],
     notification_events: list[dict[str, object]],
@@ -300,6 +301,7 @@ def _build_controller_health(
     critical_requests = len([item for item in execution_requests if item.get("health_label") == "critical"])
     watch_requests = len([item for item in execution_requests if item.get("health_label") == "watch"])
     stalled_live_runners = len([item for item in live_runner_summary if item.get("stalled")])
+    stalled_maintenance_runners = len([item for item in maintenance_runner_summary if item.get("stalled")])
     stale_broker_snapshot = int(bool(broker_health.get("stale")))
     failed_broker_sync = int(bool(broker_health.get("failed")))
     broker_reconcile_drift = int(broker_reconcile.get("mismatch_count", 0) or 0)
@@ -327,6 +329,12 @@ def _build_controller_health(
         severity="warning",
         count=stalled_live_runners,
         detail="最近一次 live cycle 距今已经超过阈值，runner 可能已经停滞或失联。",
+    )
+    add_issue(
+        code="stalled_maintenance_runner",
+        severity="warning",
+        count=stalled_maintenance_runners,
+        detail="maintenance runner 长时间没有新的维护周期，控制器巡检可能已经停住。",
     )
     add_issue(
         code="failed_broker_sync",
@@ -405,6 +413,7 @@ def _build_controller_health(
             "critical_requests": critical_requests,
             "watch_requests": watch_requests,
             "stalled_live_runners": stalled_live_runners,
+            "stalled_maintenance_runners": stalled_maintenance_runners,
             "failed_broker_sync": failed_broker_sync,
             "stale_broker_snapshot": stale_broker_snapshot,
             "broker_reconcile_drift": broker_reconcile_drift,
@@ -497,6 +506,69 @@ def _build_maintenance_summary(maintenance_cycles: list[dict[str, object]]) -> d
         "latest_maintenance_status": str(latest.get("status", "")),
         "latest_maintenance_at": str(latest.get("started_at", "")),
     }
+
+
+def _build_maintenance_runner_summary(
+    maintenance_cycles: list[dict[str, object]],
+    *,
+    stall_threshold_seconds: float = 0.0,
+) -> list[dict[str, object]]:
+    """按 maintenance runner 聚合维护周期，帮助判断巡检器是不是还在正常跳动。
+
+    live runner 关注的是“策略轮询有没有在跑”；
+    maintenance runner 关注的是“运维巡检有没有继续工作”。
+    两者都是 runner，但观察维度不同，所以这里单独整理。
+    """
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for cycle in maintenance_cycles:
+        runner_id = str(cycle.get("runner_id", "")).strip() or "maintenance-default"
+        grouped.setdefault(runner_id, []).append(cycle)
+
+    rows: list[dict[str, object]] = []
+    for runner_id, cycles in grouped.items():
+        ordered = sorted(cycles, key=lambda item: str(item.get("started_at", "")), reverse=True)
+        latest = ordered[0]
+        last_cycle_at = str(latest.get("started_at", ""))
+        last_cycle_age_seconds = 0
+        if last_cycle_at:
+            try:
+                last_cycle_age_seconds = max(int((datetime.now(UTC) - datetime.fromisoformat(last_cycle_at)).total_seconds()), 0)
+            except ValueError:
+                last_cycle_age_seconds = 0
+        effective_stall_threshold = max(float(stall_threshold_seconds), 0.0)
+        stalled = bool(effective_stall_threshold > 0 and last_cycle_age_seconds > effective_stall_threshold)
+        last_success_at = next(
+            (str(item.get("finished_at", "")) for item in ordered if item.get("status") == "completed"),
+            "",
+        )
+        rows.append(
+            {
+                "runner_id": runner_id,
+                "cycle_count": len(ordered),
+                "latest_status": str(latest.get("status", "")),
+                "last_cycle_at": last_cycle_at,
+                "last_cycle_age_seconds": last_cycle_age_seconds,
+                "stall_threshold_seconds": effective_stall_threshold,
+                "stalled": stalled,
+                "completed_count": len([item for item in ordered if item.get("status") == "completed"]),
+                "failed_count": len([item for item in ordered if item.get("status") == "failed"]),
+                "running_count": len([item for item in ordered if item.get("status") == "running"]),
+                "last_success_at": last_success_at,
+                "total_emitted_notifications": sum(int(item.get("emitted_notification_count", 0) or 0) for item in ordered),
+                "total_delivered_notifications": sum(int(item.get("delivered_notification_count", 0) or 0) for item in ordered),
+                "latest_pending_notifications": int(latest.get("remaining_pending_notifications", 0) or 0),
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            not bool(item.get("stalled")),
+            str(item.get("latest_status", "")) != "failed",
+            -int(item.get("failed_count", 0)),
+            -int(item.get("cycle_count", 0)),
+            str(item.get("last_cycle_at", "")),
+        )
+    )
+    return rows
 
 
 def _build_broker_sync_summary(broker_syncs: list[dict[str, object]]) -> dict[str, object]:
@@ -915,6 +987,7 @@ def build_history_payload(
     notification_assignment_sla_seconds: int = 0,
     notification_assignment_sla_overrides: dict[str, int] | None = None,
     live_runner_stall_threshold_seconds: float = 0.0,
+    maintenance_runner_stall_threshold_seconds: float = 0.0,
     broker_max_snapshot_age_seconds: int = 0,
     broker_reconcile_thresholds: dict[str, float] | None = None,
     latest_run_detail: dict[str, object] | None = None,
@@ -935,6 +1008,10 @@ def build_history_payload(
         stall_threshold_seconds=max(float(live_runner_stall_threshold_seconds), 0.0),
     )
     maintenance_summary = _build_maintenance_summary(maintenance_cycles)
+    maintenance_runner_summary = _build_maintenance_runner_summary(
+        maintenance_cycles,
+        stall_threshold_seconds=max(float(maintenance_runner_stall_threshold_seconds), 0.0),
+    )
     broker_sync_summary = _build_broker_sync_summary(broker_syncs)
     broker_health = _build_broker_health(
         broker_syncs,
@@ -953,6 +1030,7 @@ def build_history_payload(
     controller_health = _build_controller_health(
         execution_requests=execution_requests,
         live_runner_summary=live_runner_summary,
+        maintenance_runner_summary=maintenance_runner_summary,
         broker_health=broker_health,
         broker_reconcile=broker_reconcile,
         notification_events=notification_events,
@@ -993,6 +1071,8 @@ def build_history_payload(
             "failed_maintenance_cycles": maintenance_summary["failed_maintenance_cycles"],
             "latest_maintenance_status": maintenance_summary["latest_maintenance_status"],
             "latest_maintenance_at": maintenance_summary["latest_maintenance_at"],
+            "maintenance_runners": len(maintenance_runner_summary),
+            "stalled_maintenance_runners": len([item for item in maintenance_runner_summary if item.get("stalled")]),
             "total_broker_syncs": broker_sync_summary["total_broker_syncs"],
             "failed_broker_syncs": broker_sync_summary["failed_broker_syncs"],
             "stale_broker_syncs": int(bool(broker_health["stale"])),
@@ -1104,6 +1184,7 @@ def build_history_payload(
         "recent_live_cycles": live_cycles,
         "live_runner_summary": live_runner_summary[:8],
         "recent_maintenance_cycles": maintenance_cycles,
+        "maintenance_runner_summary": maintenance_runner_summary[:8],
         "recent_broker_syncs": broker_syncs,
         "broker_health": broker_health,
         "broker_reconcile": broker_reconcile,

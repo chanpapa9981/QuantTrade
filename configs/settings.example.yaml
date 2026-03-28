@@ -51,6 +51,14 @@ live:
   poll_interval_seconds: 60.0
   max_cycles_per_run: 1
 
+maintenance:
+  enabled: false
+  runner_id: maintenance-default
+  poll_interval_seconds: 300.0
+  max_cycles_per_run: 1
+  runs_limit: 20
+  events_limit: 50
+
 broker:
   enabled: false
   provider: local_file
