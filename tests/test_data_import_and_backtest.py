@@ -40,6 +40,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         notification_delivery_retry_backoff_strategy: str = "linear",
         notification_delivery_retry_backoff_multiplier: float = 2.0,
         notification_max_delivery_retry_backoff_seconds: float = 300.0,
+        notification_silence_window_seconds: int = 0,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -77,6 +78,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  delivery_retry_backoff_strategy: {notification_delivery_retry_backoff_strategy}",
                     f"  delivery_retry_backoff_multiplier: {notification_delivery_retry_backoff_multiplier}",
                     f"  max_delivery_retry_backoff_seconds: {notification_max_delivery_retry_backoff_seconds}",
+                    f"  silence_window_seconds: {notification_silence_window_seconds}",
                 ]
             ),
             encoding="utf-8",
@@ -142,6 +144,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         order_detail = app.order_detail(order_id=run_detail["detail"]["orders"][0]["order_id"])
         recent_audit = app.recent_audit_events(limit=5)
         recent_notifications = app.recent_notification_events(limit=5)
+        notification_summary = app.notification_summary(limit=5)
         history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
 
         self.assertEqual(import_result["rows_inserted"], 30)
@@ -215,6 +218,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("broker_status", recent_orders["orders"][0])
         self.assertGreaterEqual(len(recent_audit["audit_events"]), 1)
         self.assertEqual(len(recent_notifications["notifications"]), 0)
+        self.assertIn("summary", notification_summary)
         self.assertIn("history_summary", history_payload)
         self.assertIn("recent_executions", history_payload)
         self.assertIn("execution_requests", history_payload)
@@ -236,6 +240,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("dispatched_notifications", history_payload["history_summary"])
         self.assertIn("failed_notifications", history_payload["history_summary"])
         self.assertIn("scheduled_retry_notifications", history_payload["history_summary"])
+        self.assertIn("silenced_notification_groups", history_payload["history_summary"])
+        self.assertIn("suppressed_duplicates", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
 
@@ -658,6 +664,119 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(second_history["history_summary"]["failed_notifications"], 1)
         self.assertEqual(second_history["history_summary"]["scheduled_retry_notifications"], 0)
         self.assertFalse(delivery_log_path.exists())
+
+    def test_notification_duplicates_are_silenced_within_window(self) -> None:
+        """验证同类通知在静默窗口内不会重复生成新事件或重复写 outbox。"""
+        base_dir = Path("var/test-artifacts/notification-silence")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-silence.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_silence_window_seconds=300,
+        )
+        app = QuantTradeApp(str(config_path))
+
+        first = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="first blocked event",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        second = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="second blocked event should be silenced",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        recent_notifications = app.recent_notification_events(limit=5)
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
+        summary_rows = app.notification_summary(limit=5)
+
+        self.assertEqual(first["delivery_status"], "queued")
+        self.assertEqual(second["delivery_status"], "silenced_duplicate")
+        self.assertEqual(first["event_id"], second["event_id"])
+        self.assertEqual(len(recent_notifications["notifications"]), 1)
+        self.assertEqual(recent_notifications["notifications"][0]["suppressed_duplicate_count"], 1)
+        self.assertTrue(recent_notifications["notifications"][0]["silenced_until"])
+        self.assertTrue(recent_notifications["notifications"][0]["last_suppressed_at"])
+        self.assertEqual(history_payload["history_summary"]["silenced_notification_groups"], 1)
+        self.assertEqual(history_payload["history_summary"]["suppressed_duplicates"], 1)
+        self.assertEqual(summary_rows["summary"][0]["category"], "execution_blocked")
+        self.assertEqual(summary_rows["summary"][0]["suppressed_duplicates"], 1)
+        self.assertEqual(len(outbox_path.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_notification_duplicate_after_silence_window_creates_new_event(self) -> None:
+        """验证静默窗口过期后，同类通知会重新生成新的通知事件。"""
+        base_dir = Path("var/test-artifacts/notification-silence-expired")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-silence-expired.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_silence_window_seconds=300,
+        )
+        app = QuantTradeApp(str(config_path))
+
+        first = app._record_notification(
+            severity="critical",
+            category="execution_final_failure",
+            title="Backtest execution failed",
+            message="first final failure",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET silenced_until = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", first["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        second = app._record_notification(
+            severity="critical",
+            category="execution_final_failure",
+            title="Backtest execution failed",
+            message="second final failure after silence expired",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        recent_notifications = app.recent_notification_events(limit=5)
+
+        self.assertEqual(first["delivery_status"], "queued")
+        self.assertEqual(second["delivery_status"], "queued")
+        self.assertNotEqual(first["event_id"], second["event_id"])
+        self.assertEqual(len(recent_notifications["notifications"]), 2)
+        self.assertEqual(len(outbox_path.read_text(encoding="utf-8").splitlines()), 2)
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

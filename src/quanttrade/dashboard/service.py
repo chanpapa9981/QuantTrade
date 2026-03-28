@@ -127,6 +127,50 @@ def _build_order_lifecycle_details(orders: list[dict[str, object]]) -> dict[str,
     return grouped
 
 
+def _build_notification_summary(notification_events: list[dict[str, object]]) -> list[dict[str, object]]:
+    """把通知事件压缩成更适合值班视角的聚合表。
+
+    原始通知表更适合追单条事件；
+    这个聚合表更适合快速回答：
+    - 最近最常见的告警类别是什么；
+    - 哪种状态最常出现；
+    - 哪类告警被静默压缩得最多。
+    """
+    grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+    for event in notification_events:
+        key = (
+            str(event.get("category", "")),
+            str(event.get("severity", "")),
+            str(event.get("delivery_status", "")),
+        )
+        current = grouped.setdefault(
+            key,
+            {
+                "category": key[0],
+                "severity": key[1],
+                "delivery_status": key[2],
+                "event_count": 0,
+                "suppressed_duplicates": 0,
+                "last_seen_at": "",
+            },
+        )
+        current["event_count"] = int(current.get("event_count", 0)) + 1
+        current["suppressed_duplicates"] = int(current.get("suppressed_duplicates", 0)) + int(
+            event.get("suppressed_duplicate_count", 0)
+        )
+        if str(event.get("timestamp", "")) > str(current.get("last_seen_at", "")):
+            current["last_seen_at"] = str(event.get("timestamp", ""))
+    rows = list(grouped.values())
+    rows.sort(
+        key=lambda item: (
+            -int(item.get("event_count", 0)),
+            -int(item.get("suppressed_duplicates", 0)),
+            str(item.get("category", "")),
+        )
+    )
+    return rows
+
+
 def _build_execution_requests(executions: list[dict[str, object]]) -> list[dict[str, object]]:
     """把多次 execution attempt 按 `request_id` 归并成请求级摘要。"""
     grouped: dict[str, list[dict[str, object]]] = {}
@@ -330,6 +374,7 @@ def build_history_payload(
     order_lifecycle_details = _build_order_lifecycle_details(orders)
     execution_requests = _build_execution_requests(executions)
     execution_request_details = _build_execution_request_details(executions)
+    notification_summary = _build_notification_summary(notification_events)
     request_anomalies = sorted(
         [item for item in execution_requests if item.get("anomaly_score", 0) > 0],
         key=lambda item: (-int(item.get("anomaly_score", 0)), str(item.get("last_updated_at", ""))),
@@ -379,6 +424,10 @@ def build_history_payload(
                     and str(item.get("next_delivery_attempt_at", "")).strip()
                 ]
             ),
+            "silenced_notification_groups": len(
+                [item for item in notification_events if int(item.get("suppressed_duplicate_count", 0)) > 0]
+            ),
+            "suppressed_duplicates": sum(int(item.get("suppressed_duplicate_count", 0)) for item in notification_events),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),
@@ -404,6 +453,7 @@ def build_history_payload(
         "execution_request_details": execution_request_details,
         "request_anomalies": request_anomalies[:8],
         "recent_executions": executions,
+        "notification_summary": notification_summary[:8],
         "order_lifecycles": order_lifecycles,
         "order_lifecycle_details": order_lifecycle_details,
         "recent_orders": orders,

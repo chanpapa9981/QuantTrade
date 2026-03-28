@@ -544,6 +544,10 @@ class BacktestRunRepository:
         delivered_at: str = "",
         last_error: str = "",
         next_delivery_attempt_at: str = "",
+        notification_key: str = "",
+        silenced_until: str = "",
+        suppressed_duplicate_count: int = 0,
+        last_suppressed_at: str = "",
         symbol: str = "",
         timeframe: str = "",
         run_id: str = "",
@@ -568,8 +572,9 @@ class BacktestRunRepository:
                 INSERT INTO notification_events (
                     event_id, timestamp, severity, category, title, message,
                     provider, delivery_status, delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
+                    notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                     symbol, timeframe, run_id, execution_id, request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -585,6 +590,10 @@ class BacktestRunRepository:
                     delivered_at[:40],
                     last_error[:500],
                     scheduled_next_attempt,
+                    notification_key[:300],
+                    silenced_until[:40],
+                    max(int(suppressed_duplicate_count), 0),
+                    last_suppressed_at[:40],
                     symbol[:40],
                     timeframe[:20],
                     run_id[:80],
@@ -607,6 +616,7 @@ class BacktestRunRepository:
                 """
                 SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
                        delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
+                       notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 ORDER BY timestamp DESC
@@ -631,14 +641,105 @@ class BacktestRunRepository:
                 "delivered_at": row[10],
                 "last_error": row[11],
                 "next_delivery_attempt_at": row[12],
-                "symbol": row[13],
-                "timeframe": row[14],
-                "run_id": row[15],
-                "execution_id": row[16],
-                "request_id": row[17],
+                "notification_key": row[13],
+                "silenced_until": row[14],
+                "suppressed_duplicate_count": row[15],
+                "last_suppressed_at": row[16],
+                "symbol": row[17],
+                "timeframe": row[18],
+                "run_id": row[19],
+                "execution_id": row[20],
+                "request_id": row[21],
             }
             for row in rows
         ]
+
+    def fetch_active_notification_for_key(self, notification_key: str, current_time: str) -> dict[str, object] | None:
+        """查找仍处于静默窗口内的同类通知。
+
+        这里的目标不是做全局唯一约束，而是做“短时间内的降噪”：
+        如果同一类告警刚刚发出过，就不再重复生成新事件，而是把计数压到已有事件上。
+        """
+        if not notification_key.strip():
+            return None
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "notification_events" for table in tables):
+                return None
+            row = connection.execute(
+                """
+                SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
+                       delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
+                       notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
+                       symbol, timeframe, run_id, execution_id, request_id
+                FROM notification_events
+                WHERE notification_key = ?
+                  AND silenced_until >= ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (notification_key[:300], current_time[:40]),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return None
+        return {
+            "event_id": row[0],
+            "timestamp": row[1],
+            "severity": row[2],
+            "category": row[3],
+            "title": row[4],
+            "message": row[5],
+            "provider": row[6],
+            "delivery_status": row[7],
+            "delivery_target": row[8],
+            "delivery_attempts": row[9],
+            "delivered_at": row[10],
+            "last_error": row[11],
+            "next_delivery_attempt_at": row[12],
+            "notification_key": row[13],
+            "silenced_until": row[14],
+            "suppressed_duplicate_count": row[15],
+            "last_suppressed_at": row[16],
+            "symbol": row[17],
+            "timeframe": row[18],
+            "run_id": row[19],
+            "execution_id": row[20],
+            "request_id": row[21],
+        }
+
+    def mark_notification_duplicate_suppressed(
+        self,
+        *,
+        event_id: str,
+        silenced_until: str,
+        last_suppressed_at: str,
+    ) -> None:
+        """把重复告警压缩到已有通知事件上。
+
+        这样 history 里仍然能看到“这类告警被压了多少次”，
+        但不会因为每次重复都新插一行而把页面和 outbox 刷爆。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET silenced_until = ?,
+                    last_suppressed_at = ?,
+                    suppressed_duplicate_count = suppressed_duplicate_count + 1
+                WHERE event_id = ?
+                """,
+                (
+                    silenced_until[:40],
+                    last_suppressed_at[:40],
+                    event_id[:80],
+                ),
+            )
+        finally:
+            connection.close()
 
     def fetch_notifications_pending_delivery(self, limit: int = 20, max_delivery_attempts: int = 3) -> list[dict[str, object]]:
         """查询仍需要通知 worker 继续处理的事件。
@@ -656,6 +757,7 @@ class BacktestRunRepository:
                 """
                 SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
                        delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
+                       notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 WHERE delivery_status IN ('queued', 'delivery_failed_retryable')
@@ -683,11 +785,15 @@ class BacktestRunRepository:
                 "delivered_at": row[10],
                 "last_error": row[11],
                 "next_delivery_attempt_at": row[12],
-                "symbol": row[13],
-                "timeframe": row[14],
-                "run_id": row[15],
-                "execution_id": row[16],
-                "request_id": row[17],
+                "notification_key": row[13],
+                "silenced_until": row[14],
+                "suppressed_duplicate_count": row[15],
+                "last_suppressed_at": row[16],
+                "symbol": row[17],
+                "timeframe": row[18],
+                "run_id": row[19],
+                "execution_id": row[20],
+                "request_id": row[21],
             }
             for row in rows
         ]
@@ -1501,6 +1607,7 @@ class BacktestRunRepository:
                     """
                     SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
                            delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
+                           notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                            symbol, timeframe, run_id, execution_id, request_id
                     FROM notification_events
                     ORDER BY timestamp DESC
@@ -1523,11 +1630,15 @@ class BacktestRunRepository:
                         "delivered_at": row[10],
                         "last_error": row[11],
                         "next_delivery_attempt_at": row[12],
-                        "symbol": row[13],
-                        "timeframe": row[14],
-                        "run_id": row[15],
-                        "execution_id": row[16],
-                        "request_id": row[17],
+                        "notification_key": row[13],
+                        "silenced_until": row[14],
+                        "suppressed_duplicate_count": row[15],
+                        "last_suppressed_at": row[16],
+                        "symbol": row[17],
+                        "timeframe": row[18],
+                        "run_id": row[19],
+                        "execution_id": row[20],
+                        "request_id": row[21],
                     }
                     for row in notification_rows
                 ]

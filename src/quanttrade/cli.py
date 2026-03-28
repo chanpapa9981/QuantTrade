@@ -71,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--limit", type=int, default=20, help="Number of audit events to list")
     notifications_parser = subparsers.add_parser("notifications", help="List recent notification events")
     notifications_parser.add_argument("--limit", type=int, default=20, help="Number of notification events to list")
+    notification_summary_parser = subparsers.add_parser("notification-summary", help="Show aggregated notification summary rows")
+    notification_summary_parser.add_argument("--limit", type=int, default=50, help="Number of recent notification events to aggregate")
     notifications_deliver_parser = subparsers.add_parser(
         "notifications-deliver",
         help="Process queued notification events through the local delivery worker",
@@ -214,6 +216,10 @@ def main() -> None:
 
     if args.command == "notifications":
         print(json.dumps(app.recent_notification_events(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notification-summary":
+        print(json.dumps(app.notification_summary(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "notifications-deliver":

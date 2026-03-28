@@ -65,6 +65,7 @@ class NotificationConfig:
     delivery_retry_backoff_strategy: str = "linear"
     delivery_retry_backoff_multiplier: float = 2.0
     max_delivery_retry_backoff_seconds: float = 300.0
+    silence_window_seconds: int = 0
 
 
 @dataclass(slots=True)

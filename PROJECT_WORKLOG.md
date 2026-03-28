@@ -109,6 +109,7 @@
 | W-056 | 通知 / Dashboard / CLI | 增加本地通知事件与 outbox 骨架 | 支持 notification_events、`notifications` 命令、history 告警面板和 JSONL outbox | 已完成 |
 | W-057 | 通知 / Dashboard / CLI | 增加通知投递 worker 状态机 | 支持 `notifications-deliver`、投递尝试次数/失败原因/adapter dispatch log、history 告警状态筛选与统计 | 已完成 |
 | W-058 | 通知 / Dashboard | 增加通知重投退避时间窗 | 支持 `next_delivery_attempt_at`、通知独立退避策略、history `Next Try` 展示和延后重投 | 已完成 |
+| W-059 | 通知 / Dashboard / CLI | 增加告警静默窗口与汇总视图 | 支持重复告警压缩、`notification-summary`、history `Notification Summary` 和 suppressed duplicate 统计 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -757,6 +758,18 @@
 | 为什么这么做 | 因为通知渠道的失败通常和交易任务失败不是一回事。交易任务可能需要尽快再试，但通知渠道如果瞬时异常，立刻重复撞击往往只会制造更多噪音。给通知系统单独加上退避时间窗，才能让告警链路既可恢复，又不会把自己变成新的噪音源。 |
 | 未完成 | 真实定时 worker、按 provider 区分退避策略、静默窗口、聚合压缩、外部渠道确认回执 |
 | 备注 | 这一轮把通知层从“会失败重试”推进成了“有节奏地延后重投”的更真实运维骨架 |
+
+### 2026-03-28 第 42 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让通知系统学会“少说废话”：同类告警短时间内不重复刷屏，同时提供聚合视角快速看近况 |
+| 输入 | 已有通知事件、worker、退避时间窗，但同类失败仍可能频繁出现，history 里也还缺少一个更偏值班的告警聚合视图 |
+| 产出 | `silence_window_seconds` 配置；通知 `notification_key` / `silenced_until` / `suppressed_duplicate_count` / `last_suppressed_at` 字段；重复告警压缩逻辑；`notification-summary` CLI；history 页 `Notification Summary` 面板、Silenced/Suppressed 展示与摘要卡片；对应测试 |
+| 结果 | 现在同类告警在静默窗口内会被压到已有通知事件上，而不是重复写新行和新 outbox；同时可以直接按 category / severity / status 看近期香港告警汇总，而不用逐条翻最近事件 |
+| 为什么这么做 | 因为真正影响人效率的，往往不是“没有告警”，而是“太多重复告警把真正重要的信号淹没了”。先让通知系统学会降噪，再提供聚合视角，值班时才能更快看出最近到底是哪一类问题最活跃、哪类告警被压得最多。 |
+| 未完成 | 更细粒度静默策略、按 provider/类别分别配置窗口、批量 digest、人工确认/ack、外部渠道回执 |
+| 备注 | 这一轮把通知层从“会发、会重试”推进成了“会降噪、会聚合”的更成熟运维视角 |
 
 ---
 

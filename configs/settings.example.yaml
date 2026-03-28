@@ -52,3 +52,4 @@ notification:
   delivery_retry_backoff_strategy: linear
   delivery_retry_backoff_multiplier: 2.0
   max_delivery_retry_backoff_seconds: 300.0
+  silence_window_seconds: 0

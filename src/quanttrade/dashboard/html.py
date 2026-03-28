@@ -1161,6 +1161,26 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </section>
 
         <section class="panel">
+          <h2 class="panel-title">Notification Summary</h2>
+          <div class="panel-note">Grouped alert categories for faster triage</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Severity</th>
+                  <th>Status</th>
+                  <th>Events</th>
+                  <th>Suppressed</th>
+                  <th>Last Seen</th>
+                </tr>
+              </thead>
+              <tbody id="notification-summary-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Recent Notifications</h2>
           <div class="panel-note">Latest controller alerts and local delivery outcomes</div>
           <div class="table-wrap">
@@ -1173,7 +1193,9 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Title</th>
                   <th>Status</th>
                   <th>Attempts</th>
+                  <th>Suppressed</th>
                   <th>Next Try</th>
+                  <th>Silenced Until</th>
                   <th>Provider</th>
                   <th>Last Error</th>
                   <th>Execution</th>
@@ -1330,6 +1352,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Dispatched Alerts", value: summary.dispatched_notifications }},
         {{ label: "Failed Alerts", value: summary.failed_notifications }},
         {{ label: "Retrying Alerts", value: summary.scheduled_retry_notifications }},
+        {{ label: "Silenced Groups", value: summary.silenced_notification_groups }},
+        {{ label: "Suppressed Dups", value: summary.suppressed_duplicates }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
@@ -1651,6 +1675,31 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       `).join("");
     }}
     function renderNotifications() {{
+      const summaryRows = payload.notification_summary.filter(row => {{
+        const matchingEvents = payload.recent_notifications.filter(event => {{
+          if (state.runId !== "all" && event.run_id && event.run_id !== state.runId) return false;
+          if (state.requestId && event.request_id && event.request_id !== state.requestId) return false;
+          if (state.executionId && event.execution_id && event.execution_id !== state.executionId) return false;
+          if (state.notificationStatus !== "all" && event.delivery_status !== state.notificationStatus) return false;
+          return (
+            event.category === row.category &&
+            event.severity === row.severity &&
+            event.delivery_status === row.delivery_status
+          );
+        }});
+        return matchingEvents.length > 0;
+      }});
+      document.getElementById("notification-summary-table").innerHTML = summaryRows.length ? summaryRows.map(row => `
+        <tr>
+          <td>${{row.category}}</td>
+          <td>${{row.severity}}</td>
+          <td>${{row.delivery_status}}</td>
+          <td>${{fmt(row.event_count)}}</td>
+          <td>${{fmt(row.suppressed_duplicates)}}</td>
+          <td>${{row.last_seen_at || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="6" class="muted">No notification summary rows in the current view.</td></tr>';
+
       // 通知事件是“系统决定应该提醒人”的那一层，比普通日志更接近运维值班视角。
       const rows = payload.recent_notifications.filter(event => {{
         if (state.runId !== "all" && event.run_id && event.run_id !== state.runId) return false;
@@ -1667,12 +1716,14 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{event.title}}</td>
           <td>${{event.delivery_status}}</td>
           <td>${{fmt(event.delivery_attempts ?? 0)}}</td>
+          <td>${{fmt(event.suppressed_duplicate_count ?? 0)}}</td>
           <td>${{event.next_delivery_attempt_at || ""}}</td>
+          <td>${{event.silenced_until || ""}}</td>
           <td>${{event.provider}}</td>
           <td>${{event.last_error || ""}}</td>
           <td>${{event.execution_id || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="10" class="muted">No notification events in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="12" class="muted">No notification events in the current view.</td></tr>';
     }}
     async function copyCurrentLink() {{
       // 优先用浏览器剪贴板 API；如果环境不支持，就退化成 prompt。

@@ -211,6 +211,29 @@ class QuantTradeApp:
             return min(delay, capped_max)
         return delay
 
+    def _build_notification_key(
+        self,
+        *,
+        category: str,
+        title: str,
+        symbol: str,
+        timeframe: str,
+    ) -> str:
+        """构造通知去重键。
+
+        这里故意不把 `request_id` / `execution_id` 拼进去，
+        因为静默窗口想解决的是“同类告警在短时间内刷屏”，
+        而不是区分每一次底层尝试。
+        """
+        return "|".join(
+            [
+                str(category).strip().lower(),
+                str(title).strip().lower(),
+                str(symbol).strip().upper(),
+                str(timeframe).strip().lower(),
+            ]
+        )
+
     def _record_notification(
         self,
         *,
@@ -233,7 +256,35 @@ class QuantTradeApp:
         """
         delivery_status = "suppressed"
         delivery_target = ""
+        notification_key = self._build_notification_key(
+            category=category,
+            title=title,
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+        silence_window_seconds = max(int(self.settings.notification.silence_window_seconds), 0)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        silenced_until = ""
+        if silence_window_seconds > 0:
+            silenced_until = (datetime.now(timezone.utc) + timedelta(seconds=silence_window_seconds)).isoformat()
         if self.settings.notification.enabled and should_emit_notification(self.settings.notification, severity):
+            with database_lock(self.settings.data.duckdb_path):
+                # 通知系统现在已经能脱离回测主流程单独使用，所以这里不能假设表一定已经由别的流程建好。
+                create_schema(self.settings.data.duckdb_path)
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                if silence_window_seconds > 0:
+                    active = repository.fetch_active_notification_for_key(notification_key=notification_key, current_time=now_iso)
+                    if active is not None:
+                        repository.mark_notification_duplicate_suppressed(
+                            event_id=str(active.get("event_id", "")),
+                            silenced_until=silenced_until,
+                            last_suppressed_at=now_iso,
+                        )
+                        return {
+                            "event_id": str(active.get("event_id", "")),
+                            "delivery_status": "silenced_duplicate",
+                            "delivery_target": str(active.get("delivery_target", "")),
+                        }
             outbox_payload = {
                 "severity": severity,
                 "category": category,
@@ -245,6 +296,7 @@ class QuantTradeApp:
                 "execution_id": execution_id,
                 "request_id": request_id,
                 "provider": self.settings.notification.provider,
+                "notification_key": notification_key,
             }
             delivery_target = append_notification_to_outbox(self.settings.notification, outbox_payload)
             delivery_status = "queued"
@@ -268,6 +320,8 @@ class QuantTradeApp:
                 run_id=run_id,
                 execution_id=execution_id,
                 request_id=request_id,
+                notification_key=notification_key,
+                silenced_until=silenced_until,
             )
         return {
             "event_id": event_id,
@@ -576,6 +630,11 @@ class QuantTradeApp:
         with database_lock(self.settings.data.duckdb_path):
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"notifications": repository.fetch_recent_notification_events(limit=limit)}
+
+    def notification_summary(self, limit: int = 50) -> dict[str, object]:
+        """汇总最近通知事件，方便快速看近况而不是逐条翻告警。"""
+        history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
+        return {"summary": history_payload["notification_summary"]}
 
     def deliver_notifications(self, limit: int = 20) -> dict[str, object]:
         """让通知 worker 处理待投递事件。
