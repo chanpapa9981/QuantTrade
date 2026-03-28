@@ -115,6 +115,7 @@
 | W-062 | 通知 / Dashboard / CLI | 增加告警责任分派工作流 | 支持 `notification-assign`、assigned_to/assigned_at/assignment_note、history owner 过滤与责任统计 | 已完成 |
 | W-063 | 通知 / Dashboard / CLI | 增加 owner 负载汇总视图 | 支持 `notification-owner-summary`、按 owner 聚合未确认/升级/高优先级告警，以及 history `Notification Owners` 面板 | 已完成 |
 | W-064 | 通知 / Dashboard / CLI | 增加 assignment SLA 过期视图 | 支持 `assignment_sla_seconds`、`notification-sla`、history `Notification SLA` 面板和 SLA Breached 统计 | 已完成 |
+| W-065 | 通知 / Dashboard / CLI | 增加通知已解决（resolve）语义 | 支持 `notification-resolve`、resolved_at/resolved_note、Active/Resolved 统计，以及 resolved 告警自动退出 SLA/活跃待办 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -835,6 +836,18 @@
 | 为什么这么做 | 因为 assignment 只能说明“这件事归谁”，却不能说明“归他之后已经拖了多久”。对真实环境的单人操作而言，SLA 过期视图可以把“我知道这件事存在”升级成“我知道它已经拖到必须先处理”。 |
 | 未完成 | 分级 SLA、按 severity/类别设置不同阈值、SLA 到期自动再次升级、owner 级告警催办、外部值班工具同步 |
 | 备注 | 这一轮把通知层从“可分派、可汇总”推进成了“可追踪处理时效”的更完整运维视图 |
+
+### 2026-03-28 第 48 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把通知从“看过没有”再推进一步，显式区分“还在处理”与“已经解决” |
+| 输入 | 已有 ack、assignment 和 SLA，但缺少一个明确的完成态，导致已经处理完的告警仍会和活跃待办混在一起 |
+| 产出 | `notification-resolve` CLI；`resolved_at` / `resolved_note` 字段；history `Active Alerts` / `Resolved Alerts` 统计；owner 负载视图里的 active/resolved 拆分；resolved 告警自动退出 SLA 过期视图；对应测试 |
+| 结果 | 现在通知事件除了能被确认、分派、升级，还能被明确标记为“已解决”，历史页也能区分哪些仍是活跃事项，哪些只是历史记录 |
+| 为什么这么做 | 因为真实运行时最常见的困扰不是“没有状态”，而是“状态太粗”。如果只有 ack，没有 resolve，你最后只能知道“我看过它”，却不能知道“我是不是已经真正处理完了”。把 resolve 补进去后，待办视图、SLA 视图和 owner 负载才会更接近真实运维工作流。 |
+| 未完成 | 批量 resolve、resolve 后自动二次通知、按类别自动归档、关闭原因模板、外部工单系统同步 |
+| 备注 | 这一轮把通知层从“可看、可分派、可超时”推进成了“可完成闭环”的更成熟运维状态机 |
 
 ---
 

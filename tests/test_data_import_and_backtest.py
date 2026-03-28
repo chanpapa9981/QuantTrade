@@ -254,6 +254,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("suppressed_duplicates", history_payload["history_summary"])
         self.assertIn("acknowledged_notifications", history_payload["history_summary"])
         self.assertIn("unacknowledged_notifications", history_payload["history_summary"])
+        self.assertIn("resolved_notifications", history_payload["history_summary"])
+        self.assertIn("active_notifications", history_payload["history_summary"])
         self.assertIn("assigned_notifications", history_payload["history_summary"])
         self.assertIn("unassigned_notifications", history_payload["history_summary"])
         self.assertIn("escalated_notifications", history_payload["history_summary"])
@@ -990,6 +992,47 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(history_payload["history_summary"]["assigned_notifications"], 1)
         self.assertEqual(history_payload["history_summary"]["unassigned_notifications"], 0)
 
+    def test_notification_resolve_marks_event_completed(self) -> None:
+        """验证通知可以被显式标记为已解决，方便把活跃待办和已完成事项区分开。"""
+        base_dir = Path("var/test-artifacts/notification-resolve")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-resolve.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="warning",
+            category="execution_retry_scheduled",
+            title="Backtest retry scheduled",
+            message="resolve test",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        resolved = app.resolve_notification(event_id=created["event_id"], note="manual mitigation finished")
+        recent_notifications = app.recent_notification_events(limit=5)
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
+
+        self.assertIsNotNone(resolved["notification"])
+        self.assertEqual(resolved["notification"]["event_id"], created["event_id"])
+        self.assertTrue(resolved["notification"]["resolved_at"])
+        self.assertEqual(resolved["notification"]["resolved_note"], "manual mitigation finished")
+        self.assertTrue(recent_notifications["notifications"][0]["resolved_at"])
+        self.assertEqual(recent_notifications["notifications"][0]["resolved_note"], "manual mitigation finished")
+        self.assertEqual(history_payload["history_summary"]["resolved_notifications"], 1)
+        self.assertEqual(history_payload["history_summary"]["active_notifications"], 0)
+
     def test_notification_assignment_reduces_escalated_unowned_count(self) -> None:
         """验证升级告警在分派后不再被统计成无人接手。"""
         base_dir = Path("var/test-artifacts/notification-escalated-assigned")
@@ -1099,10 +1142,14 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         unassigned_row = next(row for row in summary_rows if row["owner"] == "(unassigned)")
 
         self.assertEqual(owner_row["event_count"], 1)
+        self.assertEqual(owner_row["active_count"], 1)
+        self.assertEqual(owner_row["resolved_count"], 0)
         self.assertEqual(owner_row["unacknowledged_count"], 1)
         self.assertEqual(owner_row["escalated_count"], 1)
         self.assertEqual(owner_row["open_high_priority_count"], 1)
         self.assertEqual(unassigned_row["event_count"], 1)
+        self.assertEqual(unassigned_row["active_count"], 1)
+        self.assertEqual(unassigned_row["resolved_count"], 0)
         self.assertEqual(unassigned_row["unacknowledged_count"], 1)
         self.assertEqual(unassigned_row["escalated_count"], 0)
 
@@ -1189,6 +1236,56 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         )
         app.assign_notification(event_id=created["event_id"], owner="operator", note="already reviewing")
         app.acknowledge_notification(event_id=created["event_id"], note="handled")
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_at = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", created["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        sla_rows = app.notification_sla_summary(limit=10)["summary"]
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=10)
+
+        self.assertEqual(sla_rows, [])
+        self.assertEqual(history_payload["history_summary"]["sla_breached_notifications"], 0)
+
+    def test_notification_sla_summary_skips_resolved_alerts(self) -> None:
+        """验证已解决的告警不会继续停留在 SLA 过期列表里。"""
+        base_dir = Path("var/test-artifacts/notification-sla-resolved")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-sla-resolved.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_assignment_sla_seconds=60,
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="sla resolved skip",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.assign_notification(event_id=created["event_id"], owner="operator", note="queued for fix")
+        app.resolve_notification(event_id=created["event_id"], note="issue closed")
 
         connection = connect_database(str(db_path))
         try:

@@ -1195,6 +1195,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                 <tr>
                   <th>Owner</th>
                   <th>Events</th>
+                  <th>Active</th>
+                  <th>Resolved</th>
                   <th>Unacked</th>
                   <th>Escalated</th>
                   <th>Open High</th>
@@ -1246,10 +1248,12 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Silenced Until</th>
                   <th>Owner</th>
                   <th>Assigned At</th>
+                  <th>Resolved At</th>
                   <th>Acked At</th>
                   <th>Escalated At</th>
                   <th>Provider</th>
                   <th>Assign Note</th>
+                  <th>Resolved Note</th>
                   <th>Ack Note</th>
                   <th>Escalation</th>
                   <th>Last Error</th>
@@ -1415,6 +1419,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Suppressed Dups", value: summary.suppressed_duplicates }},
         {{ label: "Acked Alerts", value: summary.acknowledged_notifications }},
         {{ label: "Unacked Alerts", value: summary.unacknowledged_notifications }},
+        {{ label: "Active Alerts", value: summary.active_notifications }},
+        {{ label: "Resolved Alerts", value: summary.resolved_notifications }},
         {{ label: "Assigned Alerts", value: summary.assigned_notifications }},
         {{ label: "Unassigned Alerts", value: summary.unassigned_notifications }},
         {{ label: "Escalated Alerts", value: summary.escalated_notifications }},
@@ -1820,12 +1826,14 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         <tr>
           <td>${{row.owner}}</td>
           <td>${{fmt(row.event_count)}}</td>
+          <td>${{fmt(row.active_count)}}</td>
+          <td>${{fmt(row.resolved_count)}}</td>
           <td>${{fmt(row.unacknowledged_count)}}</td>
           <td>${{fmt(row.escalated_count)}}</td>
           <td>${{fmt(row.open_high_priority_count)}}</td>
           <td>${{row.last_seen_at || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="6" class="muted">No notification owner rows in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="8" class="muted">No notification owner rows in the current view.</td></tr>';
       const slaRows = (payload.notification_sla_summary || []).filter(row => {{
         if (state.notificationOwner === "assigned" && (!row.owner || row.owner === "(unassigned)")) return false;
         if (state.notificationOwner === "unassigned" && row.owner && row.owner !== "(unassigned)") return false;
@@ -1856,16 +1864,18 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{event.silenced_until || ""}}</td>
           <td>${{event.assigned_to || ""}}</td>
           <td>${{event.assigned_at || ""}}</td>
+          <td>${{event.resolved_at || ""}}</td>
           <td>${{event.acknowledged_at || ""}}</td>
           <td>${{event.escalated_at || ""}}</td>
           <td>${{event.provider}}</td>
           <td>${{event.assignment_note || ""}}</td>
+          <td>${{event.resolved_note || ""}}</td>
           <td>${{event.acknowledged_note || ""}}</td>
           <td>${{event.escalation_level || event.escalation_reason || ""}}</td>
           <td>${{event.last_error || ""}}</td>
           <td>${{event.execution_id || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="19" class="muted">No notification events in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="21" class="muted">No notification events in the current view.</td></tr>';
     }}
     async function copyCurrentLink() {{
       // 优先用浏览器剪贴板 API；如果环境不支持，就退化成 prompt。

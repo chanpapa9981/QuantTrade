@@ -80,6 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
     notification_ack_parser = subparsers.add_parser("notification-ack", help="Mark one notification event as acknowledged")
     notification_ack_parser.add_argument("--event-id", required=True, help="Notification event id")
     notification_ack_parser.add_argument("--note", default="", help="Optional acknowledgement note")
+    notification_resolve_parser = subparsers.add_parser("notification-resolve", help="Mark one notification event as resolved")
+    notification_resolve_parser.add_argument("--event-id", required=True, help="Notification event id")
+    notification_resolve_parser.add_argument("--note", default="", help="Optional resolution note")
     notification_assign_parser = subparsers.add_parser("notification-assign", help="Assign one notification event to an owner")
     notification_assign_parser.add_argument("--event-id", required=True, help="Notification event id")
     notification_assign_parser.add_argument("--owner", required=True, help="Owner or operator name")
@@ -245,6 +248,10 @@ def main() -> None:
 
     if args.command == "notification-ack":
         print(json.dumps(app.acknowledge_notification(event_id=args.event_id, note=args.note), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notification-resolve":
+        print(json.dumps(app.resolve_notification(event_id=args.event_id, note=args.note), indent=2, ensure_ascii=False))
         return
 
     if args.command == "notification-assign":

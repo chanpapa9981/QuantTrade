@@ -182,6 +182,8 @@ def _build_notification_owner_summary(notification_events: list[dict[str, object
             {
                 "owner": owner,
                 "event_count": 0,
+                "active_count": 0,
+                "resolved_count": 0,
                 "unacknowledged_count": 0,
                 "escalated_count": 0,
                 "open_high_priority_count": 0,
@@ -189,12 +191,18 @@ def _build_notification_owner_summary(notification_events: list[dict[str, object
             },
         )
         current["event_count"] = int(current.get("event_count", 0)) + 1
-        if not str(event.get("acknowledged_at", "")).strip():
+        resolved = bool(str(event.get("resolved_at", "")).strip())
+        if resolved:
+            current["resolved_count"] = int(current.get("resolved_count", 0)) + 1
+        else:
+            current["active_count"] = int(current.get("active_count", 0)) + 1
+        if not resolved and not str(event.get("acknowledged_at", "")).strip():
             current["unacknowledged_count"] = int(current.get("unacknowledged_count", 0)) + 1
-        if str(event.get("escalated_at", "")).strip():
+        if not resolved and str(event.get("escalated_at", "")).strip():
             current["escalated_count"] = int(current.get("escalated_count", 0)) + 1
         if (
-            not str(event.get("acknowledged_at", "")).strip()
+            not resolved
+            and not str(event.get("acknowledged_at", "")).strip()
             and str(event.get("severity", "")).strip() in {"error", "critical"}
         ):
             current["open_high_priority_count"] = int(current.get("open_high_priority_count", 0)) + 1
@@ -224,6 +232,8 @@ def _build_notification_sla_summary(
     rows: list[dict[str, object]] = []
     for event in notification_events:
         if not str(event.get("assigned_to", "")).strip():
+            continue
+        if str(event.get("resolved_at", "")).strip():
             continue
         if str(event.get("acknowledged_at", "")).strip():
             continue
@@ -524,6 +534,12 @@ def build_history_payload(
             ),
             "unacknowledged_notifications": len(
                 [item for item in notification_events if not str(item.get("acknowledged_at", "")).strip()]
+            ),
+            "resolved_notifications": len(
+                [item for item in notification_events if str(item.get("resolved_at", "")).strip()]
+            ),
+            "active_notifications": len(
+                [item for item in notification_events if not str(item.get("resolved_at", "")).strip()]
             ),
             "assigned_notifications": len(
                 [item for item in notification_events if str(item.get("assigned_to", "")).strip()]

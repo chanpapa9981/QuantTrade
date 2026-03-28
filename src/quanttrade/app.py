@@ -682,6 +682,16 @@ class QuantTradeApp:
         matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
         return {"notification": matched}
 
+    def resolve_notification(self, event_id: str, note: str = "") -> dict[str, object]:
+        """把某条通知标记为已经处理完成。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            repository.resolve_notification_event(event_id=event_id, note=note)
+            refreshed = repository.fetch_recent_notification_events(limit=200)
+        matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
+        return {"notification": matched}
+
     def escalate_notifications(self, limit: int = 50) -> dict[str, object]:
         """把长时间未确认的高优先级通知标记成已升级。"""
         escalation_window_seconds = max(int(self.settings.notification.escalation_window_seconds), 0)
