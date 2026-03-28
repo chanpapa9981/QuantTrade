@@ -434,6 +434,9 @@ def build_history_payload(
             "unacknowledged_notifications": len(
                 [item for item in notification_events if not str(item.get("acknowledged_at", "")).strip()]
             ),
+            "escalated_notifications": len(
+                [item for item in notification_events if str(item.get("escalated_at", "")).strip()]
+            ),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),

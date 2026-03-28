@@ -85,6 +85,7 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Suppressed Dups", html)
         self.assertIn("Acked Alerts", html)
         self.assertIn("Unacked Alerts", html)
+        self.assertIn("Escalated Alerts", html)
         self.assertIn("Execution Requests", html)
         self.assertIn("Request Anomalies", html)
         self.assertIn("Recent Executions", html)
@@ -130,7 +131,9 @@ class HistoryHtmlTestCase(unittest.TestCase):
         self.assertIn("Next Try", html)
         self.assertIn("Silenced Until", html)
         self.assertIn("Acked At", html)
+        self.assertIn("Escalated At", html)
         self.assertIn("Ack Note", html)
+        self.assertIn("Escalation", html)
         self.assertIn("Last Error", html)
         self.assertIn("Recent Audit Events", html)
 

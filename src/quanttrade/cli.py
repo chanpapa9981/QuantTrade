@@ -76,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     notification_ack_parser = subparsers.add_parser("notification-ack", help="Mark one notification event as acknowledged")
     notification_ack_parser.add_argument("--event-id", required=True, help="Notification event id")
     notification_ack_parser.add_argument("--note", default="", help="Optional acknowledgement note")
+    notification_escalate_parser = subparsers.add_parser("notification-escalate", help="Escalate stale unacknowledged notification events")
+    notification_escalate_parser.add_argument("--limit", type=int, default=50, help="Number of recent notification events to inspect")
     notifications_deliver_parser = subparsers.add_parser(
         "notifications-deliver",
         help="Process queued notification events through the local delivery worker",
@@ -227,6 +229,10 @@ def main() -> None:
 
     if args.command == "notification-ack":
         print(json.dumps(app.acknowledge_notification(event_id=args.event_id, note=args.note), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notification-escalate":
+        print(json.dumps(app.escalate_notifications(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "notifications-deliver":

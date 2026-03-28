@@ -40,6 +40,13 @@ from quanttrade.strategies.atr_dtf import AtrDynamicTrendFollowingStrategy
 
 LOGGER = logging.getLogger(__name__)
 
+_NOTIFICATION_SEVERITY_RANK = {
+    "info": 10,
+    "warning": 20,
+    "error": 30,
+    "critical": 40,
+}
+
 
 class QuantTradeApp:
     """QuantTrade 的高层门面对象。
@@ -233,6 +240,15 @@ class QuantTradeApp:
                 str(timeframe).strip().lower(),
             ]
         )
+
+    def _notification_meets_escalation_threshold(self, severity: str) -> bool:
+        """判断一条通知是否达到了当前升级策略要求的最低级别。"""
+        current = _NOTIFICATION_SEVERITY_RANK.get(str(severity).strip().lower(), 0)
+        threshold = _NOTIFICATION_SEVERITY_RANK.get(
+            str(self.settings.notification.escalation_min_severity).strip().lower(),
+            40,
+        )
+        return current >= threshold
 
     def _record_notification(
         self,
@@ -645,6 +661,62 @@ class QuantTradeApp:
             refreshed = repository.fetch_recent_notification_events(limit=200)
         matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
         return {"notification": matched}
+
+    def escalate_notifications(self, limit: int = 50) -> dict[str, object]:
+        """把长时间未确认的高优先级通知标记成已升级。"""
+        escalation_window_seconds = max(int(self.settings.notification.escalation_window_seconds), 0)
+        if escalation_window_seconds <= 0:
+            return {
+                "processed": 0,
+                "escalated": 0,
+                "window_seconds": escalation_window_seconds,
+                "message": "notification escalation is disabled",
+            }
+
+        candidates = self.recent_notification_events(limit=limit)["notifications"]
+        now = datetime.now(timezone.utc)
+        processed = 0
+        escalated = 0
+
+        for event in candidates:
+            processed += 1
+            if str(event.get("acknowledged_at", "")).strip():
+                continue
+            if str(event.get("escalated_at", "")).strip():
+                continue
+            if not self._notification_meets_escalation_threshold(str(event.get("severity", ""))):
+                continue
+            timestamp_text = str(event.get("timestamp", "")).strip()
+            if not timestamp_text:
+                continue
+            try:
+                created_at = datetime.fromisoformat(timestamp_text)
+            except ValueError:
+                continue
+            age_seconds = (now - created_at).total_seconds()
+            if age_seconds < escalation_window_seconds:
+                continue
+
+            reason = (
+                f"unacknowledged for {int(age_seconds)} seconds; "
+                f"threshold={escalation_window_seconds}s severity={event.get('severity', '')}"
+            )
+            with database_lock(self.settings.data.duckdb_path):
+                create_schema(self.settings.data.duckdb_path)
+                repository = BacktestRunRepository(self.settings.data.duckdb_path)
+                repository.mark_notification_escalated(
+                    event_id=str(event.get("event_id", "")),
+                    escalation_level="stale_unacknowledged",
+                    escalation_reason=reason,
+                )
+            escalated += 1
+
+        return {
+            "processed": processed,
+            "escalated": escalated,
+            "window_seconds": escalation_window_seconds,
+            "min_severity": self.settings.notification.escalation_min_severity,
+        }
 
     def deliver_notifications(self, limit: int = 20) -> dict[str, object]:
         """让通知 worker 处理待投递事件。

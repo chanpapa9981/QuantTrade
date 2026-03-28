@@ -550,6 +550,9 @@ class BacktestRunRepository:
         last_suppressed_at: str = "",
         acknowledged_at: str = "",
         acknowledged_note: str = "",
+        escalated_at: str = "",
+        escalation_level: str = "",
+        escalation_reason: str = "",
         symbol: str = "",
         timeframe: str = "",
         run_id: str = "",
@@ -576,8 +579,9 @@ class BacktestRunRepository:
                     provider, delivery_status, delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                     notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                     acknowledged_at, acknowledged_note,
+                    escalated_at, escalation_level, escalation_reason,
                     symbol, timeframe, run_id, execution_id, request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -599,6 +603,9 @@ class BacktestRunRepository:
                     last_suppressed_at[:40],
                     acknowledged_at[:40],
                     acknowledged_note[:500],
+                    escalated_at[:40],
+                    escalation_level[:40],
+                    escalation_reason[:500],
                     symbol[:40],
                     timeframe[:20],
                     run_id[:80],
@@ -623,6 +630,7 @@ class BacktestRunRepository:
                        delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                        acknowledged_at, acknowledged_note,
+                       escalated_at, escalation_level, escalation_reason,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 ORDER BY timestamp DESC
@@ -653,11 +661,14 @@ class BacktestRunRepository:
                 "last_suppressed_at": row[16],
                 "acknowledged_at": row[17],
                 "acknowledged_note": row[18],
-                "symbol": row[19],
-                "timeframe": row[20],
-                "run_id": row[21],
-                "execution_id": row[22],
-                "request_id": row[23],
+                "escalated_at": row[19],
+                "escalation_level": row[20],
+                "escalation_reason": row[21],
+                "symbol": row[22],
+                "timeframe": row[23],
+                "run_id": row[24],
+                "execution_id": row[25],
+                "request_id": row[26],
             }
             for row in rows
         ]
@@ -681,6 +692,7 @@ class BacktestRunRepository:
                        delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                        acknowledged_at, acknowledged_note,
+                       escalated_at, escalation_level, escalation_reason,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 WHERE notification_key = ?
@@ -714,11 +726,14 @@ class BacktestRunRepository:
             "last_suppressed_at": row[16],
             "acknowledged_at": row[17],
             "acknowledged_note": row[18],
-            "symbol": row[19],
-            "timeframe": row[20],
-            "run_id": row[21],
-            "execution_id": row[22],
-            "request_id": row[23],
+            "escalated_at": row[19],
+            "escalation_level": row[20],
+            "escalation_reason": row[21],
+            "symbol": row[22],
+            "timeframe": row[23],
+            "run_id": row[24],
+            "execution_id": row[25],
+            "request_id": row[26],
         }
 
     def mark_notification_duplicate_suppressed(
@@ -770,6 +785,7 @@ class BacktestRunRepository:
                        delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                        acknowledged_at, acknowledged_note,
+                       escalated_at, escalation_level, escalation_reason,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 WHERE delivery_status IN ('queued', 'delivery_failed_retryable')
@@ -803,11 +819,14 @@ class BacktestRunRepository:
                 "last_suppressed_at": row[16],
                 "acknowledged_at": row[17],
                 "acknowledged_note": row[18],
-                "symbol": row[19],
-                "timeframe": row[20],
-                "run_id": row[21],
-                "execution_id": row[22],
-                "request_id": row[23],
+                "escalated_at": row[19],
+                "escalation_level": row[20],
+                "escalation_reason": row[21],
+                "symbol": row[22],
+                "timeframe": row[23],
+                "run_id": row[24],
+                "execution_id": row[25],
+                "request_id": row[26],
             }
             for row in rows
         ]
@@ -826,6 +845,28 @@ class BacktestRunRepository:
                 (
                     datetime.now(UTC).isoformat(),
                     note[:500],
+                    event_id[:80],
+                ),
+            )
+        finally:
+            connection.close()
+
+    def mark_notification_escalated(self, event_id: str, escalation_level: str, escalation_reason: str) -> None:
+        """把长期未确认的通知升级标记出来。"""
+        connection = connect_database(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET escalated_at = ?,
+                    escalation_level = ?,
+                    escalation_reason = ?
+                WHERE event_id = ?
+                """,
+                (
+                    datetime.now(UTC).isoformat(),
+                    escalation_level[:40],
+                    escalation_reason[:500],
                     event_id[:80],
                 ),
             )
@@ -1643,6 +1684,7 @@ class BacktestRunRepository:
                            delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                            notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                            acknowledged_at, acknowledged_note,
+                           escalated_at, escalation_level, escalation_reason,
                            symbol, timeframe, run_id, execution_id, request_id
                     FROM notification_events
                     ORDER BY timestamp DESC
@@ -1671,11 +1713,14 @@ class BacktestRunRepository:
                         "last_suppressed_at": row[16],
                         "acknowledged_at": row[17],
                         "acknowledged_note": row[18],
-                        "symbol": row[19],
-                        "timeframe": row[20],
-                        "run_id": row[21],
-                        "execution_id": row[22],
-                        "request_id": row[23],
+                        "escalated_at": row[19],
+                        "escalation_level": row[20],
+                        "escalation_reason": row[21],
+                        "symbol": row[22],
+                        "timeframe": row[23],
+                        "run_id": row[24],
+                        "execution_id": row[25],
+                        "request_id": row[26],
                     }
                     for row in notification_rows
                 ]

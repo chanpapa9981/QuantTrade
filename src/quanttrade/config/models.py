@@ -66,6 +66,8 @@ class NotificationConfig:
     delivery_retry_backoff_multiplier: float = 2.0
     max_delivery_retry_backoff_seconds: float = 300.0
     silence_window_seconds: int = 0
+    escalation_window_seconds: int = 0
+    escalation_min_severity: str = "critical"
 
 
 @dataclass(slots=True)

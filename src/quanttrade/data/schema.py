@@ -93,6 +93,9 @@ def create_schema(db_path: str) -> None:
                 last_suppressed_at TEXT NOT NULL DEFAULT '',
                 acknowledged_at TEXT NOT NULL DEFAULT '',
                 acknowledged_note TEXT NOT NULL DEFAULT '',
+                escalated_at TEXT NOT NULL DEFAULT '',
+                escalation_level TEXT NOT NULL DEFAULT '',
+                escalation_reason TEXT NOT NULL DEFAULT '',
                 symbol TEXT NOT NULL DEFAULT '',
                 timeframe TEXT NOT NULL DEFAULT '',
                 run_id TEXT NOT NULL DEFAULT '',
@@ -154,6 +157,9 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS last_suppressed_at TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS acknowledged_at TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS acknowledged_note TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS escalated_at TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS escalation_level TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS escalation_reason TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS symbol TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS timeframe TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS run_id TEXT DEFAULT '';")

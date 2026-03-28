@@ -41,6 +41,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         notification_delivery_retry_backoff_multiplier: float = 2.0,
         notification_max_delivery_retry_backoff_seconds: float = 300.0,
         notification_silence_window_seconds: int = 0,
+        notification_escalation_window_seconds: int = 0,
+        notification_escalation_min_severity: str = "critical",
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -79,6 +81,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  delivery_retry_backoff_multiplier: {notification_delivery_retry_backoff_multiplier}",
                     f"  max_delivery_retry_backoff_seconds: {notification_max_delivery_retry_backoff_seconds}",
                     f"  silence_window_seconds: {notification_silence_window_seconds}",
+                    f"  escalation_window_seconds: {notification_escalation_window_seconds}",
+                    f"  escalation_min_severity: {notification_escalation_min_severity}",
                 ]
             ),
             encoding="utf-8",
@@ -244,6 +248,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("suppressed_duplicates", history_payload["history_summary"])
         self.assertIn("acknowledged_notifications", history_payload["history_summary"])
         self.assertIn("unacknowledged_notifications", history_payload["history_summary"])
+        self.assertIn("escalated_notifications", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
 
@@ -821,6 +826,110 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(recent_notifications["notifications"][0]["acknowledged_note"], "checked by operator")
         self.assertEqual(history_payload["history_summary"]["acknowledged_notifications"], 1)
         self.assertEqual(history_payload["history_summary"]["unacknowledged_notifications"], 0)
+
+    def test_notification_escalation_marks_stale_unacknowledged_alert(self) -> None:
+        """验证高优先级且长期未确认的告警会被升级标记。"""
+        base_dir = Path("var/test-artifacts/notification-escalation")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-escalation.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_escalation_window_seconds=60,
+            notification_escalation_min_severity="error",
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_final_failure",
+            title="Backtest execution failed",
+            message="escalation test",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET timestamp = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", created["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        result = app.escalate_notifications(limit=10)
+        recent_notifications = app.recent_notification_events(limit=5)
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
+
+        self.assertEqual(result["escalated"], 1)
+        self.assertEqual(recent_notifications["notifications"][0]["event_id"], created["event_id"])
+        self.assertTrue(recent_notifications["notifications"][0]["escalated_at"])
+        self.assertEqual(recent_notifications["notifications"][0]["escalation_level"], "stale_unacknowledged")
+        self.assertIn("threshold=60s", recent_notifications["notifications"][0]["escalation_reason"])
+        self.assertEqual(history_payload["history_summary"]["escalated_notifications"], 1)
+
+    def test_notification_escalation_skips_acknowledged_alert(self) -> None:
+        """验证已确认的告警不会再次进入升级流程。"""
+        base_dir = Path("var/test-artifacts/notification-escalation-acked")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-escalation-acked.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_escalation_window_seconds=60,
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="acked escalation skip",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.acknowledge_notification(event_id=created["event_id"], note="already handled")
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET timestamp = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", created["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        result = app.escalate_notifications(limit=10)
+        recent_notifications = app.recent_notification_events(limit=5)
+
+        self.assertEqual(result["escalated"], 0)
+        self.assertEqual(recent_notifications["notifications"][0]["event_id"], created["event_id"])
+        self.assertEqual(recent_notifications["notifications"][0]["escalated_at"], "")
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

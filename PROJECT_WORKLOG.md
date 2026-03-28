@@ -111,6 +111,7 @@
 | W-058 | 通知 / Dashboard | 增加通知重投退避时间窗 | 支持 `next_delivery_attempt_at`、通知独立退避策略、history `Next Try` 展示和延后重投 | 已完成 |
 | W-059 | 通知 / Dashboard / CLI | 增加告警静默窗口与汇总视图 | 支持重复告警压缩、`notification-summary`、history `Notification Summary` 和 suppressed duplicate 统计 | 已完成 |
 | W-060 | 通知 / Dashboard / CLI | 增加通知确认（ack）能力 | 支持 `notification-ack`、ack 时间/备注持久化、history 已确认/未确认统计与展示 | 已完成 |
+| W-061 | 通知 / Dashboard / CLI | 增加未确认告警升级标记 | 支持 `notification-escalate`、escalated_at/level/reason、history 升级统计与展示 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -783,6 +784,18 @@
 | 为什么这么做 | 因为真正的值班闭环里，“告警发出”只是开始，不是结束。如果没有确认状态，页面里永远只有“发生过什么”，却没有“哪些已经有人处理”。把 ack 加进去后，通知系统才开始具备最基本的运维协作语义。 |
 | 未完成 | 按人记录确认者、撤销确认、批量 ack、告警升级/分派、外部渠道双向回执 |
 | 备注 | 这一轮把通知层从“系统视角可见”推进成了“人与系统可协作”的更完整闭环 |
+
+### 2026-03-28 第 44 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让高优先级告警在长时间无人确认时，不只是“躺在那里”，而是能被系统明确升级标记出来 |
+| 输入 | 已有通知 ack 和聚合视图，但仍缺少一个关键运维动作：识别并标记“长期未确认的重要告警” |
+| 产出 | `escalation_window_seconds` / `escalation_min_severity` 配置；`escalated_at` / `escalation_level` / `escalation_reason` 字段；`notification-escalate` CLI；history 升级统计与表格列；对应测试 |
+| 结果 | 现在系统可以扫描最近通知，把超过阈值且仍未确认的高优先级告警标记成 `stale_unacknowledged` 升级状态，并把升级时间与原因明确记录下来 |
+| 为什么这么做 | 因为很多真正危险的问题，不是“告警没发出来”，而是“告警发出来了，但没人处理，也没人知道它已经拖了多久”。把未确认超时的告警提升成明确的升级状态，值班视角才真正开始有优先级和时效语义。 |
+| 未完成 | 真正的分派/升级路线、升级通知二次发送、按人/班次 SLA、批量 ack/批量 escalate、外部协作系统联动 |
+| 备注 | 这一轮把通知层从“可确认”推进成了“可升级”的更完整值班闭环 |
 
 ---
 
