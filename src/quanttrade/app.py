@@ -657,6 +657,11 @@ class QuantTradeApp:
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
         return {"summary": history_payload["notification_owner_summary"]}
 
+    def notification_sla_summary(self, limit: int = 50) -> dict[str, object]:
+        """汇总已分派但仍未确认且超过 SLA 的通知。"""
+        history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
+        return {"summary": history_payload["notification_sla_summary"]}
+
     def acknowledge_notification(self, event_id: str, note: str = "") -> dict[str, object]:
         """确认某条通知已经被人查看或处理过。"""
         with database_lock(self.settings.data.duckdb_path):
@@ -859,6 +864,7 @@ class QuantTradeApp:
                 bundle["orders"],
                 bundle["audit_events"],
                 bundle["notification_events"],
+                notification_assignment_sla_seconds=self.settings.notification.assignment_sla_seconds,
             )
 
     def export_backtest(

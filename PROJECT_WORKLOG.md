@@ -114,6 +114,7 @@
 | W-061 | 通知 / Dashboard / CLI | 增加未确认告警升级标记 | 支持 `notification-escalate`、escalated_at/level/reason、history 升级统计与展示 | 已完成 |
 | W-062 | 通知 / Dashboard / CLI | 增加告警责任分派工作流 | 支持 `notification-assign`、assigned_to/assigned_at/assignment_note、history owner 过滤与责任统计 | 已完成 |
 | W-063 | 通知 / Dashboard / CLI | 增加 owner 负载汇总视图 | 支持 `notification-owner-summary`、按 owner 聚合未确认/升级/高优先级告警，以及 history `Notification Owners` 面板 | 已完成 |
+| W-064 | 通知 / Dashboard / CLI | 增加 assignment SLA 过期视图 | 支持 `assignment_sla_seconds`、`notification-sla`、history `Notification SLA` 面板和 SLA Breached 统计 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -822,6 +823,18 @@
 | 为什么这么做 | 因为 assignment 解决的是“这件事归谁”，但值班管理还需要回答“这个人现在压了多少事”。只有把 owner 负载汇总出来，assignment 才真正从单条字段升级成可运营的工作视图。 |
 | 未完成 | 自动负载均衡分派、按班次/角色看 owner 汇总、owner 级 SLA、批量移交、外部值班系统同步 |
 | 备注 | 这一轮把通知层从“能分派责任”推进成了“能看责任负载”的更成熟协作视角 |
+
+### 2026-03-28 第 47 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 owner 视图不只是看负载，还能指出“哪些已接手事项已经拖过 SLA” |
+| 输入 | 已有 assignment 和 owner workload，但仍缺少一个明确的超时视角，导致 operator 只能知道“手上有多少事”，却不知道“哪些已经拖太久” |
+| 产出 | `assignment_sla_seconds` 配置；`notification-sla` CLI；history `Notification SLA` 面板；`SLA Breached` 摘要卡片；基于 `assigned_at` / `acknowledged_at` 动态计算的 SLA 过期视图；对应测试 |
+| 结果 | 现在系统可以直接列出“已分派但仍未确认且超出 SLA”的告警，并显示负责人、分派时间、当前年龄、SLA 阈值和超时秒数 |
+| 为什么这么做 | 因为 assignment 只能说明“这件事归谁”，却不能说明“归他之后已经拖了多久”。对真实环境的单人操作而言，SLA 过期视图可以把“我知道这件事存在”升级成“我知道它已经拖到必须先处理”。 |
+| 未完成 | 分级 SLA、按 severity/类别设置不同阈值、SLA 到期自动再次升级、owner 级告警催办、外部值班工具同步 |
+| 备注 | 这一轮把通知层从“可分派、可汇总”推进成了“可追踪处理时效”的更完整运维视图 |
 
 ---
 

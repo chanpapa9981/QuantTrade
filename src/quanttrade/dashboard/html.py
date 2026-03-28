@@ -1207,6 +1207,28 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </section>
 
         <section class="panel">
+          <h2 class="panel-title">Notification SLA</h2>
+          <div class="panel-note">Assigned alerts that have stayed unacknowledged beyond the configured SLA window</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Owner</th>
+                  <th>Event ID</th>
+                  <th>Severity</th>
+                  <th>Category</th>
+                  <th>Assigned At</th>
+                  <th>Age Sec</th>
+                  <th>SLA Sec</th>
+                  <th>Breach Sec</th>
+                </tr>
+              </thead>
+              <tbody id="notification-sla-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Recent Notifications</h2>
           <div class="panel-note">Latest controller alerts and local delivery outcomes</div>
           <div class="table-wrap">
@@ -1397,6 +1419,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Unassigned Alerts", value: summary.unassigned_notifications }},
         {{ label: "Escalated Alerts", value: summary.escalated_notifications }},
         {{ label: "Escalated Unowned", value: summary.escalated_unassigned_notifications }},
+        {{ label: "SLA Breached", value: summary.sla_breached_notifications }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
@@ -1803,6 +1826,23 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{row.last_seen_at || ""}}</td>
         </tr>
       `).join("") : '<tr><td colspan="6" class="muted">No notification owner rows in the current view.</td></tr>';
+      const slaRows = (payload.notification_sla_summary || []).filter(row => {{
+        if (state.notificationOwner === "assigned" && (!row.owner || row.owner === "(unassigned)")) return false;
+        if (state.notificationOwner === "unassigned" && row.owner && row.owner !== "(unassigned)") return false;
+        return true;
+      }});
+      document.getElementById("notification-sla-table").innerHTML = slaRows.length ? slaRows.map(row => `
+        <tr>
+          <td>${{row.owner}}</td>
+          <td>${{row.event_id}}</td>
+          <td>${{row.severity}}</td>
+          <td>${{row.category}}</td>
+          <td>${{row.assigned_at || ""}}</td>
+          <td>${{fmt(row.age_seconds)}}</td>
+          <td>${{fmt(row.sla_seconds)}}</td>
+          <td>${{fmt(row.breach_seconds)}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="8" class="muted">No SLA-breached notifications in the current view.</td></tr>';
       document.getElementById("notifications-table").innerHTML = rows.length ? rows.map(event => `
         <tr>
           <td>${{event.timestamp}}</td>

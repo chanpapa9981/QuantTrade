@@ -55,3 +55,4 @@ notification:
   silence_window_seconds: 0
   escalation_window_seconds: 0
   escalation_min_severity: critical
+  assignment_sla_seconds: 0

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import UTC, datetime
 
 
 def _format_config_sections(
@@ -211,6 +212,50 @@ def _build_notification_owner_summary(notification_events: list[dict[str, object
     return rows
 
 
+def _build_notification_sla_summary(
+    notification_events: list[dict[str, object]],
+    assignment_sla_seconds: int,
+) -> list[dict[str, object]]:
+    """计算已分派但仍未确认的 SLA 超时告警。"""
+    if assignment_sla_seconds <= 0:
+        return []
+
+    now = datetime.now(UTC)
+    rows: list[dict[str, object]] = []
+    for event in notification_events:
+        if not str(event.get("assigned_to", "")).strip():
+            continue
+        if str(event.get("acknowledged_at", "")).strip():
+            continue
+        anchor_text = str(event.get("assigned_at", "")).strip() or str(event.get("timestamp", "")).strip()
+        if not anchor_text:
+            continue
+        try:
+            anchor_at = datetime.fromisoformat(anchor_text)
+        except ValueError:
+            continue
+        age_seconds = int((now - anchor_at).total_seconds())
+        if age_seconds < assignment_sla_seconds:
+            continue
+        rows.append(
+            {
+                "event_id": str(event.get("event_id", "")),
+                "owner": str(event.get("assigned_to", "")).strip(),
+                "severity": str(event.get("severity", "")),
+                "category": str(event.get("category", "")),
+                "title": str(event.get("title", "")),
+                "assigned_at": anchor_text,
+                "age_seconds": age_seconds,
+                "sla_seconds": assignment_sla_seconds,
+                "breach_seconds": age_seconds - assignment_sla_seconds,
+            }
+        )
+    rows.sort(
+        key=lambda item: (-int(item.get("breach_seconds", 0)), -int(item.get("age_seconds", 0)), str(item.get("owner", "")))
+    )
+    return rows
+
+
 def _build_execution_requests(executions: list[dict[str, object]]) -> list[dict[str, object]]:
     """把多次 execution attempt 按 `request_id` 归并成请求级摘要。"""
     grouped: dict[str, list[dict[str, object]]] = {}
@@ -407,6 +452,7 @@ def build_history_payload(
     orders: list[dict[str, object]],
     audit_events: list[dict[str, object]],
     notification_events: list[dict[str, object]],
+    notification_assignment_sla_seconds: int = 0,
 ) -> dict[str, object]:
     """把历史运行结果整理成历史页所需的聚合结构。"""
     latest_run = runs[0] if runs else {}
@@ -416,6 +462,10 @@ def build_history_payload(
     execution_request_details = _build_execution_request_details(executions)
     notification_summary = _build_notification_summary(notification_events)
     notification_owner_summary = _build_notification_owner_summary(notification_events)
+    notification_sla_summary = _build_notification_sla_summary(
+        notification_events,
+        assignment_sla_seconds=max(int(notification_assignment_sla_seconds), 0),
+    )
     request_anomalies = sorted(
         [item for item in execution_requests if item.get("anomaly_score", 0) > 0],
         key=lambda item: (-int(item.get("anomaly_score", 0)), str(item.get("last_updated_at", ""))),
@@ -491,6 +541,7 @@ def build_history_payload(
                     if str(item.get("escalated_at", "")).strip() and not str(item.get("assigned_to", "")).strip()
                 ]
             ),
+            "sla_breached_notifications": len(notification_sla_summary),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),
@@ -518,6 +569,7 @@ def build_history_payload(
         "recent_executions": executions,
         "notification_summary": notification_summary[:8],
         "notification_owner_summary": notification_owner_summary[:8],
+        "notification_sla_summary": notification_sla_summary[:8],
         "order_lifecycles": order_lifecycles,
         "order_lifecycle_details": order_lifecycle_details,
         "recent_orders": orders,

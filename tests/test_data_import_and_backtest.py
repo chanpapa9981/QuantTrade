@@ -43,6 +43,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         notification_silence_window_seconds: int = 0,
         notification_escalation_window_seconds: int = 0,
         notification_escalation_min_severity: str = "critical",
+        notification_assignment_sla_seconds: int = 0,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -83,6 +84,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  silence_window_seconds: {notification_silence_window_seconds}",
                     f"  escalation_window_seconds: {notification_escalation_window_seconds}",
                     f"  escalation_min_severity: {notification_escalation_min_severity}",
+                    f"  assignment_sla_seconds: {notification_assignment_sla_seconds}",
                 ]
             ),
             encoding="utf-8",
@@ -150,6 +152,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         recent_notifications = app.recent_notification_events(limit=5)
         notification_summary = app.notification_summary(limit=5)
         notification_owner_summary = app.notification_owner_summary(limit=5)
+        notification_sla_summary = app.notification_sla_summary(limit=5)
         history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
 
         self.assertEqual(import_result["rows_inserted"], 30)
@@ -225,6 +228,7 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(len(recent_notifications["notifications"]), 0)
         self.assertIn("summary", notification_summary)
         self.assertIn("summary", notification_owner_summary)
+        self.assertIn("summary", notification_sla_summary)
         self.assertIn("history_summary", history_payload)
         self.assertIn("recent_executions", history_payload)
         self.assertIn("execution_requests", history_payload)
@@ -254,9 +258,11 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("unassigned_notifications", history_payload["history_summary"])
         self.assertIn("escalated_notifications", history_payload["history_summary"])
         self.assertIn("escalated_unassigned_notifications", history_payload["history_summary"])
+        self.assertIn("sla_breached_notifications", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
         self.assertIn("notification_owner_summary", history_payload)
+        self.assertIn("notification_sla_summary", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""
@@ -1099,6 +1105,109 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(unassigned_row["event_count"], 1)
         self.assertEqual(unassigned_row["unacknowledged_count"], 1)
         self.assertEqual(unassigned_row["escalated_count"], 0)
+
+    def test_notification_sla_summary_flags_overdue_assigned_alerts(self) -> None:
+        """验证已分派但长期未确认的告警会进入 SLA 过期视图。"""
+        base_dir = Path("var/test-artifacts/notification-sla")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-sla.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_assignment_sla_seconds=60,
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="sla test",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.assign_notification(event_id=created["event_id"], owner="operator", note="waiting for manual review")
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_at = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", created["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        sla_rows = app.notification_sla_summary(limit=10)["summary"]
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=10)
+
+        self.assertEqual(len(sla_rows), 1)
+        self.assertEqual(sla_rows[0]["event_id"], created["event_id"])
+        self.assertEqual(sla_rows[0]["owner"], "operator")
+        self.assertEqual(sla_rows[0]["sla_seconds"], 60)
+        self.assertGreater(sla_rows[0]["breach_seconds"], 0)
+        self.assertEqual(history_payload["history_summary"]["sla_breached_notifications"], 1)
+
+    def test_notification_sla_summary_skips_acknowledged_alerts(self) -> None:
+        """验证已确认的告警即使 assigned_at 很早，也不会继续算作 SLA 过期。"""
+        base_dir = Path("var/test-artifacts/notification-sla-acked")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-sla-acked.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_assignment_sla_seconds=60,
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_final_failure",
+            title="Backtest execution failed",
+            message="sla acked skip",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.assign_notification(event_id=created["event_id"], owner="operator", note="already reviewing")
+        app.acknowledge_notification(event_id=created["event_id"], note="handled")
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_at = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", created["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        sla_rows = app.notification_sla_summary(limit=10)["summary"]
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=10)
+
+        self.assertEqual(sla_rows, [])
+        self.assertEqual(history_payload["history_summary"]["sla_breached_notifications"], 0)
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

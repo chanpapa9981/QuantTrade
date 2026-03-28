@@ -68,6 +68,7 @@ class NotificationConfig:
     silence_window_seconds: int = 0
     escalation_window_seconds: int = 0
     escalation_min_severity: str = "critical"
+    assignment_sla_seconds: int = 0
 
 
 @dataclass(slots=True)
