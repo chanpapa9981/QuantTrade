@@ -1197,6 +1197,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Events</th>
                   <th>Active</th>
                   <th>Resolved</th>
+                  <th>Reopened</th>
                   <th>Unacked</th>
                   <th>Escalated</th>
                   <th>Open High</th>
@@ -1222,10 +1223,55 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Assigned At</th>
                   <th>Age Sec</th>
                   <th>SLA Sec</th>
+                  <th>SLA Source</th>
                   <th>Breach Sec</th>
                 </tr>
               </thead>
               <tbody id="notification-sla-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Notification Inbox</h2>
+          <div class="panel-note">Active alerts that still need operator attention</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Owner</th>
+                  <th>Event ID</th>
+                  <th>Severity</th>
+                  <th>Category</th>
+                  <th>Title</th>
+                  <th>Active Since</th>
+                  <th>Age Sec</th>
+                  <th>Ack State</th>
+                  <th>Escalated</th>
+                  <th>Reopened</th>
+                  <th>Reopen Count</th>
+                  <th>Next Try</th>
+                </tr>
+              </thead>
+              <tbody id="notification-inbox-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Controller Health</h2>
+          <div class="panel-note">High-priority controller issues and pending self-heal candidates</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Severity</th>
+                  <th>Code</th>
+                  <th>Count</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="controller-health-table"></tbody>
             </table>
           </div>
         </section>
@@ -1249,11 +1295,14 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Owner</th>
                   <th>Assigned At</th>
                   <th>Resolved At</th>
+                  <th>Reopened At</th>
+                  <th>Reopen Count</th>
                   <th>Acked At</th>
                   <th>Escalated At</th>
                   <th>Provider</th>
                   <th>Assign Note</th>
                   <th>Resolved Note</th>
+                  <th>Reopen Note</th>
                   <th>Ack Note</th>
                   <th>Escalation</th>
                   <th>Last Error</th>
@@ -1421,11 +1470,15 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Unacked Alerts", value: summary.unacknowledged_notifications }},
         {{ label: "Active Alerts", value: summary.active_notifications }},
         {{ label: "Resolved Alerts", value: summary.resolved_notifications }},
+        {{ label: "Reopened Alerts", value: summary.reopened_notifications }},
         {{ label: "Assigned Alerts", value: summary.assigned_notifications }},
         {{ label: "Unassigned Alerts", value: summary.unassigned_notifications }},
         {{ label: "Escalated Alerts", value: summary.escalated_notifications }},
         {{ label: "Escalated Unowned", value: summary.escalated_unassigned_notifications }},
         {{ label: "SLA Breached", value: summary.sla_breached_notifications }},
+        {{ label: "Controller Issues", value: summary.controller_health_issues }},
+        {{ label: "Stale Executions", value: summary.stale_execution_candidates }},
+        {{ label: "Reconcile Queue", value: summary.runtime_reconcile_candidates }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
@@ -1754,15 +1807,25 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           const row = grouped.get(owner) || {{
             owner,
             event_count: 0,
+            active_count: 0,
+            resolved_count: 0,
+            reopened_count: 0,
             unacknowledged_count: 0,
             escalated_count: 0,
             open_high_priority_count: 0,
             last_seen_at: "",
           }};
           row.event_count += 1;
-          if (!event.acknowledged_at) row.unacknowledged_count += 1;
-          if (event.escalated_at) row.escalated_count += 1;
-          if (!event.acknowledged_at && ["error", "critical"].includes(event.severity || "")) {{
+          const resolved = !!event.resolved_at;
+          if (resolved) {{
+            row.resolved_count += 1;
+          }} else {{
+            row.active_count += 1;
+          }}
+          if ((event.reopen_count || 0) > 0) row.reopened_count += 1;
+          if (!resolved && !event.acknowledged_at) row.unacknowledged_count += 1;
+          if (!resolved && event.escalated_at) row.escalated_count += 1;
+          if (!resolved && !event.acknowledged_at && ["error", "critical"].includes(event.severity || "")) {{
             row.open_high_priority_count += 1;
           }}
           if ((event.timestamp || "") > row.last_seen_at) {{
@@ -1828,12 +1891,34 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(row.event_count)}}</td>
           <td>${{fmt(row.active_count)}}</td>
           <td>${{fmt(row.resolved_count)}}</td>
+          <td>${{fmt(row.reopened_count)}}</td>
           <td>${{fmt(row.unacknowledged_count)}}</td>
           <td>${{fmt(row.escalated_count)}}</td>
           <td>${{fmt(row.open_high_priority_count)}}</td>
           <td>${{row.last_seen_at || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="8" class="muted">No notification owner rows in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="9" class="muted">No notification owner rows in the current view.</td></tr>';
+      const inboxRows = (payload.notification_inbox || []).filter(row => {{
+        if (state.notificationOwner === "assigned" && (!row.owner || row.owner === "(unassigned)")) return false;
+        if (state.notificationOwner === "unassigned" && row.owner && row.owner !== "(unassigned)") return false;
+        return true;
+      }});
+      document.getElementById("notification-inbox-table").innerHTML = inboxRows.length ? inboxRows.map(row => `
+        <tr>
+          <td>${{row.owner}}</td>
+          <td>${{row.event_id}}</td>
+          <td>${{row.severity}}</td>
+          <td>${{row.category}}</td>
+          <td>${{row.title}}</td>
+          <td>${{row.active_since || ""}}</td>
+          <td>${{fmt(row.age_seconds)}}</td>
+          <td>${{row.ack_state}}</td>
+          <td>${{row.escalated ? "yes" : "no"}}</td>
+          <td>${{row.reopened ? "yes" : "no"}}</td>
+          <td>${{fmt(row.reopen_count)}}</td>
+          <td>${{row.next_delivery_attempt_at || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="12" class="muted">No active notification inbox rows in the current view.</td></tr>';
       const slaRows = (payload.notification_sla_summary || []).filter(row => {{
         if (state.notificationOwner === "assigned" && (!row.owner || row.owner === "(unassigned)")) return false;
         if (state.notificationOwner === "unassigned" && row.owner && row.owner !== "(unassigned)") return false;
@@ -1848,9 +1933,19 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{row.assigned_at || ""}}</td>
           <td>${{fmt(row.age_seconds)}}</td>
           <td>${{fmt(row.sla_seconds)}}</td>
+          <td>${{row.sla_source || "default"}}</td>
           <td>${{fmt(row.breach_seconds)}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="8" class="muted">No SLA-breached notifications in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="9" class="muted">No SLA-breached notifications in the current view.</td></tr>';
+      const controllerIssues = (payload.controller_health?.issues || []);
+      document.getElementById("controller-health-table").innerHTML = controllerIssues.length ? controllerIssues.map(issue => `
+        <tr>
+          <td>${{issue.severity}}</td>
+          <td>${{issue.code}}</td>
+          <td>${{fmt(issue.count)}}</td>
+          <td>${{issue.detail || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="4" class="muted">No controller health issues in the current view.</td></tr>';
       document.getElementById("notifications-table").innerHTML = rows.length ? rows.map(event => `
         <tr>
           <td>${{event.timestamp}}</td>
@@ -1865,17 +1960,20 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{event.assigned_to || ""}}</td>
           <td>${{event.assigned_at || ""}}</td>
           <td>${{event.resolved_at || ""}}</td>
+          <td>${{event.reopened_at || ""}}</td>
+          <td>${{fmt(event.reopen_count ?? 0)}}</td>
           <td>${{event.acknowledged_at || ""}}</td>
           <td>${{event.escalated_at || ""}}</td>
           <td>${{event.provider}}</td>
           <td>${{event.assignment_note || ""}}</td>
           <td>${{event.resolved_note || ""}}</td>
+          <td>${{event.reopened_note || ""}}</td>
           <td>${{event.acknowledged_note || ""}}</td>
           <td>${{event.escalation_level || event.escalation_reason || ""}}</td>
           <td>${{event.last_error || ""}}</td>
           <td>${{event.execution_id || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="21" class="muted">No notification events in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="24" class="muted">No notification events in the current view.</td></tr>';
     }}
     async function copyCurrentLink() {{
       // 优先用浏览器剪贴板 API；如果环境不支持，就退化成 prompt。

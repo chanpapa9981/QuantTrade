@@ -9,6 +9,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from quanttrade.app import QuantTradeApp
+from quanttrade.backtest.engine import BacktestEngine
 from quanttrade.core.exceptions import NonRetryableExecutionError, RetryableExecutionError
 from quanttrade.data.repository import BacktestRunRepository
 from quanttrade.data.schema import create_schema
@@ -44,6 +45,14 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         notification_escalation_window_seconds: int = 0,
         notification_escalation_min_severity: str = "critical",
         notification_assignment_sla_seconds: int = 0,
+        notification_assignment_sla_warning_seconds: int = 0,
+        notification_assignment_sla_error_seconds: int = 0,
+        notification_assignment_sla_critical_seconds: int = 0,
+        notification_reopen_resets_acknowledgement: bool = True,
+        execution_retryable_failure_classes: str = "RetryableExecutionError",
+        execution_non_retryable_failure_classes: str = "NonRetryableExecutionError",
+        execution_protection_trigger_failure_classes: str = "",
+        execution_reconcile_on_write: bool = True,
     ) -> None:
         """生成测试配置文件，方便不同测试复用同一套最小配置模板。"""
         config_path.write_text(
@@ -70,6 +79,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  protection_mode_failure_threshold: {protection_mode_failure_threshold}",
                     f"  protection_mode_cooldown_seconds: {protection_mode_cooldown_seconds}",
                     f"  skip_run_on_protection_mode: {'true' if skip_run_on_protection_mode else 'false'}",
+                    f"  retryable_failure_classes: {execution_retryable_failure_classes}",
+                    f"  non_retryable_failure_classes: {execution_non_retryable_failure_classes}",
+                    f"  protection_trigger_failure_classes: {execution_protection_trigger_failure_classes}",
+                    f"  reconcile_on_write: {'true' if execution_reconcile_on_write else 'false'}",
                     "notification:",
                     f"  provider: {notification_provider}",
                     f"  enabled: {'true' if notification_enabled else 'false'}",
@@ -85,6 +98,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  escalation_window_seconds: {notification_escalation_window_seconds}",
                     f"  escalation_min_severity: {notification_escalation_min_severity}",
                     f"  assignment_sla_seconds: {notification_assignment_sla_seconds}",
+                    f"  assignment_sla_warning_seconds: {notification_assignment_sla_warning_seconds}",
+                    f"  assignment_sla_error_seconds: {notification_assignment_sla_error_seconds}",
+                    f"  assignment_sla_critical_seconds: {notification_assignment_sla_critical_seconds}",
+                    f"  reopen_resets_acknowledgement: {'true' if notification_reopen_resets_acknowledgement else 'false'}",
                 ]
             ),
             encoding="utf-8",
@@ -255,16 +272,22 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("acknowledged_notifications", history_payload["history_summary"])
         self.assertIn("unacknowledged_notifications", history_payload["history_summary"])
         self.assertIn("resolved_notifications", history_payload["history_summary"])
+        self.assertIn("reopened_notifications", history_payload["history_summary"])
         self.assertIn("active_notifications", history_payload["history_summary"])
         self.assertIn("assigned_notifications", history_payload["history_summary"])
         self.assertIn("unassigned_notifications", history_payload["history_summary"])
         self.assertIn("escalated_notifications", history_payload["history_summary"])
         self.assertIn("escalated_unassigned_notifications", history_payload["history_summary"])
         self.assertIn("sla_breached_notifications", history_payload["history_summary"])
+        self.assertIn("controller_health_issues", history_payload["history_summary"])
+        self.assertIn("stale_execution_candidates", history_payload["history_summary"])
+        self.assertIn("runtime_reconcile_candidates", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
         self.assertIn("notification_owner_summary", history_payload)
+        self.assertIn("notification_inbox", history_payload)
         self.assertIn("notification_sla_summary", history_payload)
+        self.assertIn("controller_health", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""
@@ -1033,6 +1056,167 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(history_payload["history_summary"]["resolved_notifications"], 1)
         self.assertEqual(history_payload["history_summary"]["active_notifications"], 0)
 
+    def test_notification_reopen_restores_active_alert(self) -> None:
+        """验证已解决通知可以被 reopen，重新回到活跃待办。"""
+        base_dir = Path("var/test-artifacts/notification-reopen")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-reopen.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="reopen test",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.assign_notification(event_id=created["event_id"], owner="operator", note="take ownership")
+        app.acknowledge_notification(event_id=created["event_id"], note="initial ack")
+        app.resolve_notification(event_id=created["event_id"], note="first fix completed")
+
+        reopened = app.reopen_notification(event_id=created["event_id"], note="issue recurred after resume")
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
+        inbox_rows = app.notification_inbox(limit=10)["inbox"]
+
+        self.assertIsNotNone(reopened["notification"])
+        self.assertEqual(reopened["notification"]["event_id"], created["event_id"])
+        self.assertEqual(reopened["notification"]["resolved_at"], "")
+        self.assertEqual(reopened["notification"]["resolved_note"], "")
+        self.assertEqual(reopened["notification"]["acknowledged_at"], "")
+        self.assertTrue(reopened["notification"]["reopened_at"])
+        self.assertEqual(reopened["notification"]["reopened_note"], "issue recurred after resume")
+        self.assertEqual(reopened["notification"]["reopen_count"], 1)
+        self.assertEqual(history_payload["history_summary"]["reopened_notifications"], 1)
+        self.assertEqual(history_payload["history_summary"]["active_notifications"], 1)
+        self.assertEqual(inbox_rows[0]["event_id"], created["event_id"])
+        self.assertTrue(inbox_rows[0]["reopened"])
+
+    def test_notification_batch_reopen_restores_multiple_alerts(self) -> None:
+        """验证批量 reopen 可以一次恢复多条已解决通知。"""
+        base_dir = Path("var/test-artifacts/notification-batch-reopen")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-batch-reopen.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        first = app._record_notification(
+            severity="warning",
+            category="execution_retry_scheduled",
+            title="Backtest retry scheduled",
+            message="batch reopen first",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        second = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="batch reopen second",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.batch_resolve_notifications(
+            event_ids=[first["event_id"], second["event_id"]],
+            note="resolved before reopen",
+        )
+
+        reopened = app.batch_reopen_notifications(
+            event_ids=[first["event_id"], second["event_id"]],
+            note="reopened by batch",
+        )
+        recent_notifications = app.recent_notification_events(limit=5)["notifications"]
+
+        self.assertEqual(reopened["processed"], 2)
+        self.assertEqual(len(reopened["notifications"]), 2)
+        self.assertEqual(recent_notifications[0]["resolved_at"], "")
+        self.assertEqual(recent_notifications[1]["resolved_at"], "")
+        self.assertEqual(recent_notifications[0]["reopen_count"], 1)
+        self.assertEqual(recent_notifications[1]["reopen_count"], 1)
+
+    def test_notification_batch_actions_update_multiple_events(self) -> None:
+        """验证批量 assign / ack / resolve 能一次处理多条通知。"""
+        base_dir = Path("var/test-artifacts/notification-batch")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-batch.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        first = app._record_notification(
+            severity="warning",
+            category="execution_retry_scheduled",
+            title="Backtest retry scheduled",
+            message="batch first",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        second = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="batch second",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        assign_result = app.batch_assign_notifications(
+            event_ids=[first["event_id"], second["event_id"]],
+            owner="operator",
+            note="batch assignment",
+        )
+        ack_result = app.batch_acknowledge_notifications(
+            event_ids=[first["event_id"], second["event_id"]],
+            note="batch ack",
+        )
+        resolve_result = app.batch_resolve_notifications(
+            event_ids=[first["event_id"], second["event_id"]],
+            note="batch resolve",
+        )
+        recent_notifications = app.recent_notification_events(limit=5)["notifications"]
+
+        self.assertEqual(assign_result["processed"], 2)
+        self.assertEqual(ack_result["processed"], 2)
+        self.assertEqual(resolve_result["processed"], 2)
+        self.assertEqual(len(assign_result["notifications"]), 2)
+        self.assertTrue(all(item["assigned_to"] == "operator" for item in assign_result["notifications"]))
+        self.assertTrue(all(item["acknowledged_at"] for item in ack_result["notifications"]))
+        self.assertTrue(all(item["resolved_at"] for item in resolve_result["notifications"]))
+        self.assertTrue(all(item["resolved_note"] == "batch resolve" for item in recent_notifications[:2]))
+
     def test_notification_assignment_reduces_escalated_unowned_count(self) -> None:
         """验证升级告警在分派后不再被统计成无人接手。"""
         base_dir = Path("var/test-artifacts/notification-escalated-assigned")
@@ -1203,8 +1387,76 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(sla_rows[0]["event_id"], created["event_id"])
         self.assertEqual(sla_rows[0]["owner"], "operator")
         self.assertEqual(sla_rows[0]["sla_seconds"], 60)
+        self.assertEqual(sla_rows[0]["sla_source"], "default")
         self.assertGreater(sla_rows[0]["breach_seconds"], 0)
         self.assertEqual(history_payload["history_summary"]["sla_breached_notifications"], 1)
+
+    def test_notification_sla_summary_uses_severity_specific_override(self) -> None:
+        """验证 critical / warning 可以使用不同的 SLA 阈值。"""
+        base_dir = Path("var/test-artifacts/notification-sla-severity")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-sla-severity.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_assignment_sla_seconds=300,
+            notification_assignment_sla_warning_seconds=600,
+            notification_assignment_sla_critical_seconds=60,
+        )
+        app = QuantTradeApp(str(config_path))
+        critical = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="critical sla",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        warning = app._record_notification(
+            severity="warning",
+            category="execution_retry_scheduled",
+            title="Backtest retry scheduled",
+            message="warning sla",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.batch_assign_notifications(
+            event_ids=[critical["event_id"], warning["event_id"]],
+            owner="operator",
+            note="severity assignment",
+        )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_at = ?
+                WHERE event_id IN (?, ?)
+                """,
+                ("2024-01-01T00:00:00+00:00", critical["event_id"], warning["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        sla_rows = app.notification_sla_summary(limit=10)["summary"]
+
+        self.assertEqual(len(sla_rows), 2)
+        critical_row = next(item for item in sla_rows if item["event_id"] == critical["event_id"])
+        warning_row = next(item for item in sla_rows if item["event_id"] == warning["event_id"])
+        self.assertEqual(critical_row["sla_seconds"], 60)
+        self.assertEqual(critical_row["sla_source"], "critical")
+        self.assertEqual(warning_row["sla_seconds"], 600)
+        self.assertEqual(warning_row["sla_source"], "warning")
 
     def test_notification_sla_summary_skips_acknowledged_alerts(self) -> None:
         """验证已确认的告警即使 assigned_at 很早，也不会继续算作 SLA 过期。"""
@@ -1305,6 +1557,306 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
 
         self.assertEqual(sla_rows, [])
         self.assertEqual(history_payload["history_summary"]["sla_breached_notifications"], 0)
+
+    def test_runtime_reconcile_repairs_notification_timestamps_and_stale_executions(self) -> None:
+        """验证控制器 reconcile 能修复缺失时间戳和残留 running execution。"""
+        base_dir = Path("var/test-artifacts/runtime-reconcile")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "runtime-reconcile.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_final_failure",
+            title="Backtest execution failed",
+            message="reconcile notification",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.assign_notification(event_id=created["event_id"], owner="operator", note="reconcile owner")
+        app.resolve_notification(event_id=created["event_id"], note="resolved before ack repair")
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            execution_id = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_at = '',
+                    acknowledged_at = '',
+                    acknowledged_note = ''
+                WHERE event_id = ?
+                """,
+                (created["event_id"],),
+            )
+        finally:
+            connection.close()
+
+        reconcile_result = app.reconcile_runtime_state()
+        notifications = app.recent_notification_events(limit=5)["notifications"]
+        executions = app.recent_backtest_executions(limit=5)["executions"]
+
+        self.assertEqual(reconcile_result["repaired_assignment_timestamps"], 1)
+        self.assertEqual(reconcile_result["repaired_resolution_acknowledgements"], 1)
+        self.assertEqual(reconcile_result["recovered_stale_executions"], 1)
+        self.assertTrue(notifications[0]["assigned_at"])
+        self.assertTrue(notifications[0]["acknowledged_at"])
+        self.assertEqual(executions[0]["execution_id"], execution_id)
+        self.assertEqual(executions[0]["status"], "abandoned")
+
+    def test_preview_runtime_reconcile_reports_candidates_without_writing(self) -> None:
+        """验证 dry-run 预览只统计候选项，不直接改数据库。"""
+        base_dir = Path("var/test-artifacts/runtime-reconcile-preview")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "runtime-reconcile-preview.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="warning",
+            category="execution_retry_scheduled",
+            title="Backtest retry scheduled",
+            message="preview reconcile",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.assign_notification(event_id=created["event_id"], owner="operator", note="preview owner")
+        app.resolve_notification(event_id=created["event_id"], note="preview resolved")
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_at = '',
+                    acknowledged_at = '',
+                    acknowledged_note = ''
+                WHERE event_id = ?
+                """,
+                (created["event_id"],),
+            )
+        finally:
+            connection.close()
+
+        preview = app.preview_runtime_reconcile()
+        notifications_before = app.recent_notification_events(limit=5)["notifications"]
+        executions_before = app.recent_backtest_executions(limit=5)["executions"]
+
+        self.assertEqual(preview["repaired_assignment_timestamps"], 1)
+        self.assertEqual(preview["repaired_resolution_acknowledgements"], 1)
+        self.assertEqual(preview["recovered_stale_executions"], 1)
+        self.assertEqual(preview["total_candidates"], 3)
+        self.assertEqual(notifications_before[0]["assigned_at"], "")
+        self.assertEqual(notifications_before[0]["acknowledged_at"], "")
+        self.assertEqual(executions_before[0]["status"], "running")
+
+    def test_execution_retryable_failure_class_can_be_configured_by_name(self) -> None:
+        """验证控制器可以按失败类名把普通异常提升为可重试异常。"""
+        class CustomTransientError(RuntimeError):
+            pass
+
+        base_dir = Path("var/test-artifacts/retryable-class-config")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = base_dir / "bars.csv"
+        db_path = base_dir / "retryable-class-config.duckdb"
+        config_path = base_dir / "settings.yaml"
+        if db_path.exists():
+            db_path.unlink()
+
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            price = 100.0
+            for offset in range(30):
+                current = start + timedelta(days=offset)
+                price += 1.0
+                writer.writerow(
+                    {
+                        "timestamp": current.isoformat(),
+                        "open": round(price - 0.7, 2),
+                        "high": round(price + 0.5, 2),
+                        "low": round(price - 1.0, 2),
+                        "close": round(price, 2),
+                        "volume": 2_000_000 + offset * 1000,
+                    }
+                )
+
+        self._write_config(
+            config_path,
+            db_path,
+            max_retry_attempts=2,
+            execution_retryable_failure_classes="RetryableExecutionError,CustomTransientError",
+        )
+        app = QuantTradeApp(str(config_path))
+        app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
+
+        original_run_series = BacktestEngine.run_series
+        call_state = {"count": 0}
+
+        def flaky_run_series(self, bars, initial_equity):
+            call_state["count"] += 1
+            if call_state["count"] == 1:
+                raise CustomTransientError("custom transient failure")
+            return original_run_series(self, bars=bars, initial_equity=initial_equity)
+
+        with patch.object(BacktestEngine, "run_series", new=flaky_run_series):
+            persist_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+
+        executions = app.recent_backtest_executions(limit=5)["executions"]
+        self.assertEqual(persist_result["status"], "completed")
+        self.assertEqual(persist_result["attempts_used"], 2)
+        self.assertEqual(executions[1]["failure_class"], "CustomTransientError")
+        self.assertEqual(executions[1]["retry_decision"], "retry_scheduled")
+
+    def test_protection_trigger_failure_class_blocks_next_execution(self) -> None:
+        """验证配置里的即时保护失败类别会直接阻断下一次启动。"""
+        base_dir = Path("var/test-artifacts/protection-trigger-class")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "protection-trigger-class.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            protection_mode_failure_threshold=5,
+            protection_mode_cooldown_seconds=600,
+            skip_run_on_protection_mode=True,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            execution_protection_trigger_failure_classes="DataCorruptionError",
+        )
+        app = QuantTradeApp(str(config_path))
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            execution_id = repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
+            repository.mark_execution_failed(
+                execution_id=execution_id,
+                error_message="detected corrupted broker snapshot",
+                failure_class="DataCorruptionError",
+                retry_decision="final_failure",
+                retryable=False,
+            )
+
+        blocked = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(blocked["execution"]["failure_class"], "ProtectionMode")
+        self.assertIn("DataCorruptionError", blocked["execution"]["protection_reason"])
+
+    def test_controller_health_surfaces_top_runtime_issues(self) -> None:
+        """验证 controller health 能把最值得先看的异常集中输出。"""
+        base_dir = Path("var/test-artifacts/controller-health")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "controller-health.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_assignment_sla_seconds=60,
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="controller health notification",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+        app.assign_notification(event_id=created["event_id"], owner="operator", note="health owner")
+
+        with database_lock(str(db_path)):
+            create_schema(str(db_path))
+            repository = BacktestRunRepository(str(db_path))
+            repository.create_execution(
+                request_id=str(uuid4()),
+                symbol="AAPL",
+                timeframe="1d",
+                initial_equity=100_000.0,
+            )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_at = ?
+                WHERE event_id = ?
+                """,
+                ((datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(), created["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        health = app.controller_health(runs_limit=5, events_limit=10)["controller_health"]
+
+        self.assertGreaterEqual(health["summary"]["unacknowledged_critical_notifications"], 1)
+        self.assertGreaterEqual(health["summary"]["sla_breached_notifications"], 1)
+        self.assertGreaterEqual(health["summary"]["stale_execution_candidates"], 1)
+        self.assertTrue(any(issue["code"] == "stale_execution_candidates" for issue in health["issues"]))
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

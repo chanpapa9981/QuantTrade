@@ -77,16 +77,34 @@ def build_parser() -> argparse.ArgumentParser:
     notification_owner_summary_parser.add_argument("--limit", type=int, default=50, help="Number of recent notification events to aggregate")
     notification_sla_summary_parser = subparsers.add_parser("notification-sla", help="Show assigned but overdue notification rows")
     notification_sla_summary_parser.add_argument("--limit", type=int, default=50, help="Number of recent notification events to inspect")
+    notification_inbox_parser = subparsers.add_parser("notification-inbox", help="Show active notification inbox rows")
+    notification_inbox_parser.add_argument("--limit", type=int, default=50, help="Number of recent notification events to inspect")
+    notification_batch_ack_parser = subparsers.add_parser("notification-batch-ack", help="Acknowledge multiple notification events")
+    notification_batch_ack_parser.add_argument("--event-id", action="append", required=True, help="Notification event id; repeat for multiple")
+    notification_batch_ack_parser.add_argument("--note", default="", help="Optional acknowledgement note")
     notification_ack_parser = subparsers.add_parser("notification-ack", help="Mark one notification event as acknowledged")
     notification_ack_parser.add_argument("--event-id", required=True, help="Notification event id")
     notification_ack_parser.add_argument("--note", default="", help="Optional acknowledgement note")
     notification_resolve_parser = subparsers.add_parser("notification-resolve", help="Mark one notification event as resolved")
     notification_resolve_parser.add_argument("--event-id", required=True, help="Notification event id")
     notification_resolve_parser.add_argument("--note", default="", help="Optional resolution note")
+    notification_batch_resolve_parser = subparsers.add_parser("notification-batch-resolve", help="Resolve multiple notification events")
+    notification_batch_resolve_parser.add_argument("--event-id", action="append", required=True, help="Notification event id; repeat for multiple")
+    notification_batch_resolve_parser.add_argument("--note", default="", help="Optional resolution note")
+    notification_reopen_parser = subparsers.add_parser("notification-reopen", help="Reopen one resolved notification event")
+    notification_reopen_parser.add_argument("--event-id", required=True, help="Notification event id")
+    notification_reopen_parser.add_argument("--note", default="", help="Optional reopen note")
+    notification_batch_reopen_parser = subparsers.add_parser("notification-batch-reopen", help="Reopen multiple resolved notification events")
+    notification_batch_reopen_parser.add_argument("--event-id", action="append", required=True, help="Notification event id; repeat for multiple")
+    notification_batch_reopen_parser.add_argument("--note", default="", help="Optional reopen note")
     notification_assign_parser = subparsers.add_parser("notification-assign", help="Assign one notification event to an owner")
     notification_assign_parser.add_argument("--event-id", required=True, help="Notification event id")
     notification_assign_parser.add_argument("--owner", required=True, help="Owner or operator name")
     notification_assign_parser.add_argument("--note", default="", help="Optional assignment note")
+    notification_batch_assign_parser = subparsers.add_parser("notification-batch-assign", help="Assign multiple notification events to one owner")
+    notification_batch_assign_parser.add_argument("--event-id", action="append", required=True, help="Notification event id; repeat for multiple")
+    notification_batch_assign_parser.add_argument("--owner", required=True, help="Owner or operator name")
+    notification_batch_assign_parser.add_argument("--note", default="", help="Optional assignment note")
     notification_escalate_parser = subparsers.add_parser("notification-escalate", help="Escalate stale unacknowledged notification events")
     notification_escalate_parser.add_argument("--limit", type=int, default=50, help="Number of recent notification events to inspect")
     notifications_deliver_parser = subparsers.add_parser(
@@ -99,6 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=20,
         help="Number of queued notification events to process",
     )
+    reconcile_parser = subparsers.add_parser("reconcile-runtime", help="Repair stale runtime state before the next write cycle")
+    reconcile_parser.add_argument("--dry-run", action="store_true", help="Preview repair candidates without modifying data")
+    controller_health_parser = subparsers.add_parser("controller-health", help="Show controller health summary and highest-priority issues")
+    controller_health_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to include")
+    controller_health_parser.add_argument("--events-limit", type=int, default=50, help="Number of recent events to inspect")
     history_parser = subparsers.add_parser("history", help="Build dashboard-ready historical summary")
     history_parser.add_argument("--runs-limit", type=int, default=20, help="Number of runs to include")
     history_parser.add_argument("--events-limit", type=int, default=20, help="Number of order/audit events to include")
@@ -246,12 +269,32 @@ def main() -> None:
         print(json.dumps(app.notification_sla_summary(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
+    if args.command == "notification-inbox":
+        print(json.dumps(app.notification_inbox(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notification-batch-ack":
+        print(json.dumps(app.batch_acknowledge_notifications(event_ids=args.event_id, note=args.note), indent=2, ensure_ascii=False))
+        return
+
     if args.command == "notification-ack":
         print(json.dumps(app.acknowledge_notification(event_id=args.event_id, note=args.note), indent=2, ensure_ascii=False))
         return
 
     if args.command == "notification-resolve":
         print(json.dumps(app.resolve_notification(event_id=args.event_id, note=args.note), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notification-batch-resolve":
+        print(json.dumps(app.batch_resolve_notifications(event_ids=args.event_id, note=args.note), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notification-reopen":
+        print(json.dumps(app.reopen_notification(event_id=args.event_id, note=args.note), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "notification-batch-reopen":
+        print(json.dumps(app.batch_reopen_notifications(event_ids=args.event_id, note=args.note), indent=2, ensure_ascii=False))
         return
 
     if args.command == "notification-assign":
@@ -264,12 +307,37 @@ def main() -> None:
         )
         return
 
+    if args.command == "notification-batch-assign":
+        print(
+            json.dumps(
+                app.batch_assign_notifications(event_ids=args.event_id, owner=args.owner, note=args.note),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
     if args.command == "notification-escalate":
         print(json.dumps(app.escalate_notifications(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "notifications-deliver":
         print(json.dumps(app.deliver_notifications(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "reconcile-runtime":
+        payload = app.preview_runtime_reconcile() if args.dry_run else app.reconcile_runtime_state()
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "controller-health":
+        print(
+            json.dumps(
+                app.controller_health(runs_limit=args.runs_limit, events_limit=args.events_limit),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         return
 
     if args.command == "history":

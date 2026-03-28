@@ -69,6 +69,10 @@ class NotificationConfig:
     escalation_window_seconds: int = 0
     escalation_min_severity: str = "critical"
     assignment_sla_seconds: int = 0
+    assignment_sla_warning_seconds: int = 0
+    assignment_sla_error_seconds: int = 0
+    assignment_sla_critical_seconds: int = 0
+    reopen_resets_acknowledgement: bool = True
 
 
 @dataclass(slots=True)
@@ -89,6 +93,10 @@ class ExecutionConfig:
     protection_mode_failure_threshold: int = 2
     protection_mode_cooldown_seconds: int = 0
     skip_run_on_protection_mode: bool = True
+    retryable_failure_classes: str = "RetryableExecutionError"
+    non_retryable_failure_classes: str = "NonRetryableExecutionError"
+    protection_trigger_failure_classes: str = ""
+    reconcile_on_write: bool = True
 
 
 @dataclass(slots=True)

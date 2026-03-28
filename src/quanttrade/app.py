@@ -48,6 +48,15 @@ _NOTIFICATION_SEVERITY_RANK = {
 }
 
 
+def _parse_csv_flag_set(raw_value: str) -> set[str]:
+    """把逗号分隔配置解析成去重后的名称集合。"""
+    return {
+        item.strip()
+        for item in str(raw_value or "").split(",")
+        if item.strip()
+    }
+
+
 class QuantTradeApp:
     """QuantTrade 的高层门面对象。
 
@@ -144,22 +153,115 @@ class QuantTradeApp:
         2. 如果不再试，是因为输入有问题，还是因为系统主动阻断；
         3. 日志和持久化里应该如何描述这次判断。
         """
+        failure_class = exc.__class__.__name__
+        retryable_class_names = _parse_csv_flag_set(self.settings.execution.retryable_failure_classes)
+        non_retryable_class_names = _parse_csv_flag_set(self.settings.execution.non_retryable_failure_classes)
+
+        if failure_class in retryable_class_names:
+            return {
+                "retryable": True,
+                "failure_class": failure_class,
+                "log_reason": str(exc),
+            }
+        if failure_class in non_retryable_class_names:
+            return {
+                "retryable": False,
+                "failure_class": failure_class,
+                "log_reason": str(exc),
+            }
         if isinstance(exc, RetryableExecutionError):
             return {
                 "retryable": True,
-                "failure_class": exc.__class__.__name__,
+                "failure_class": failure_class,
                 "log_reason": str(exc),
             }
         if isinstance(exc, NonRetryableExecutionError):
             return {
                 "retryable": False,
-                "failure_class": exc.__class__.__name__,
+                "failure_class": failure_class,
                 "log_reason": str(exc),
             }
         return {
             "retryable": False,
-            "failure_class": exc.__class__.__name__,
+            "failure_class": failure_class,
             "log_reason": str(exc),
+        }
+
+    def _notification_assignment_sla_overrides(self) -> dict[str, int]:
+        """返回按严重级别覆写后的通知 SLA 配置。"""
+        return {
+            "warning": max(int(self.settings.notification.assignment_sla_warning_seconds), 0),
+            "error": max(int(self.settings.notification.assignment_sla_error_seconds), 0),
+            "critical": max(int(self.settings.notification.assignment_sla_critical_seconds), 0),
+        }
+
+    def _protection_trigger_failure_classes(self) -> set[str]:
+        """整理哪些失败类别应该立即触发保护模式。"""
+        return _parse_csv_flag_set(self.settings.execution.protection_trigger_failure_classes)
+
+    def _match_notifications_by_event_ids(
+        self,
+        event_ids: list[str],
+        refreshed: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """按输入顺序返回批量动作命中的通知。"""
+        normalized = [item.strip() for item in event_ids if item.strip()]
+        by_id = {str(item.get("event_id", "")): item for item in refreshed}
+        return [by_id[event_id] for event_id in normalized if event_id in by_id]
+
+    def reconcile_runtime_state(self) -> dict[str, object]:
+        """修复最常见的写路径不一致状态。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            repaired_assignments = repository.backfill_notification_assigned_at()
+            repaired_resolution_acknowledgements = repository.backfill_notification_acknowledged_at_from_resolution()
+            recovered_stale_executions = repository.recover_all_stale_executions()
+        return {
+            "repaired_assignment_timestamps": repaired_assignments,
+            "repaired_resolution_acknowledgements": repaired_resolution_acknowledgements,
+            "recovered_stale_executions": recovered_stale_executions,
+        }
+
+    def preview_runtime_reconcile(self) -> dict[str, object]:
+        """只统计还能自动修多少脏状态，不真正落修复。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            repaired_assignments = repository.count_notification_assignment_backfill_candidates()
+            repaired_resolution_acknowledgements = repository.count_notification_resolution_ack_backfill_candidates()
+            recovered_stale_executions = repository.count_stale_executions()
+        return {
+            "repaired_assignment_timestamps": repaired_assignments,
+            "repaired_resolution_acknowledgements": repaired_resolution_acknowledgements,
+            "recovered_stale_executions": recovered_stale_executions,
+            "total_candidates": (
+                repaired_assignments
+                + repaired_resolution_acknowledgements
+                + recovered_stale_executions
+            ),
+        }
+
+    def _maybe_reconcile_runtime_state(self, *, recover_stale_executions: bool = True) -> dict[str, object]:
+        """按配置决定是否在写操作前自动做轻量修复。"""
+        if not bool(self.settings.execution.reconcile_on_write):
+            return {
+                "repaired_assignment_timestamps": 0,
+                "repaired_resolution_acknowledgements": 0,
+                "recovered_stale_executions": 0,
+            }
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            repaired_assignments = repository.backfill_notification_assigned_at()
+            repaired_resolution_acknowledgements = repository.backfill_notification_acknowledged_at_from_resolution()
+            recovered_execution_count = 0
+            if recover_stale_executions:
+                recovered_execution_count = repository.recover_all_stale_executions()
+        return {
+            "repaired_assignment_timestamps": repaired_assignments,
+            "repaired_resolution_acknowledgements": repaired_resolution_acknowledgements,
+            "recovered_stale_executions": recovered_execution_count,
         }
 
     def _compute_retry_backoff_seconds(self, attempt_number: int) -> float:
@@ -370,6 +472,7 @@ class QuantTradeApp:
         last_error: str | None = None
         attempts_used = 0
         with execution_lock(self.settings.data.duckdb_path, symbol=symbol, timeframe=timeframe, blocking=False):
+            self._maybe_reconcile_runtime_state(recover_stale_executions=False)
             for _ in range(max_retry_attempts):
                 attempts_used += 1
                 LOGGER.info(
@@ -393,6 +496,7 @@ class QuantTradeApp:
                         recovered_execution_count=recovered_executions,
                         protection_mode_failure_threshold=protection_threshold,
                         protection_mode_cooldown_seconds=protection_cooldown_seconds,
+                        protection_trigger_failure_classes=self._protection_trigger_failure_classes(),
                     )
                     execution_detail = repository.fetch_execution_detail(execution_id)
 
@@ -644,6 +748,7 @@ class QuantTradeApp:
     def recent_notification_events(self, limit: int = 20) -> dict[str, object]:
         """查询最近通知事件，确认哪些关键运行事件已被提升成告警。"""
         with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"notifications": repository.fetch_recent_notification_events(limit=limit)}
 
@@ -662,6 +767,11 @@ class QuantTradeApp:
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
         return {"summary": history_payload["notification_sla_summary"]}
 
+    def notification_inbox(self, limit: int = 50) -> dict[str, object]:
+        """查看当前仍在活跃队列中的通知。"""
+        history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
+        return {"inbox": history_payload["notification_inbox"]}
+
     def acknowledge_notification(self, event_id: str, note: str = "") -> dict[str, object]:
         """确认某条通知已经被人查看或处理过。"""
         with database_lock(self.settings.data.duckdb_path):
@@ -671,6 +781,20 @@ class QuantTradeApp:
             refreshed = repository.fetch_recent_notification_events(limit=200)
         matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
         return {"notification": matched}
+
+    def batch_acknowledge_notifications(self, event_ids: list[str], note: str = "") -> dict[str, object]:
+        """批量确认多条通知。"""
+        normalized = [item.strip() for item in event_ids if item.strip()]
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            for event_id in normalized:
+                repository.acknowledge_notification_event(event_id=event_id, note=note)
+            refreshed = repository.fetch_recent_notification_events(limit=500)
+        return {
+            "processed": len(normalized),
+            "notifications": self._match_notifications_by_event_ids(normalized, refreshed),
+        }
 
     def assign_notification(self, event_id: str, owner: str, note: str = "") -> dict[str, object]:
         """给某条通知指定后续负责人。"""
@@ -682,6 +806,21 @@ class QuantTradeApp:
         matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
         return {"notification": matched}
 
+    def batch_assign_notifications(self, event_ids: list[str], owner: str, note: str = "") -> dict[str, object]:
+        """批量给通知指定负责人。"""
+        normalized = [item.strip() for item in event_ids if item.strip()]
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            for event_id in normalized:
+                repository.assign_notification_event(event_id=event_id, owner=owner, note=note)
+            refreshed = repository.fetch_recent_notification_events(limit=500)
+        return {
+            "processed": len(normalized),
+            "owner": owner,
+            "notifications": self._match_notifications_by_event_ids(normalized, refreshed),
+        }
+
     def resolve_notification(self, event_id: str, note: str = "") -> dict[str, object]:
         """把某条通知标记为已经处理完成。"""
         with database_lock(self.settings.data.duckdb_path):
@@ -691,6 +830,52 @@ class QuantTradeApp:
             refreshed = repository.fetch_recent_notification_events(limit=200)
         matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
         return {"notification": matched}
+
+    def batch_resolve_notifications(self, event_ids: list[str], note: str = "") -> dict[str, object]:
+        """批量把通知标记为已解决。"""
+        normalized = [item.strip() for item in event_ids if item.strip()]
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            for event_id in normalized:
+                repository.resolve_notification_event(event_id=event_id, note=note)
+            refreshed = repository.fetch_recent_notification_events(limit=500)
+        return {
+            "processed": len(normalized),
+            "notifications": self._match_notifications_by_event_ids(normalized, refreshed),
+        }
+
+    def reopen_notification(self, event_id: str, note: str = "") -> dict[str, object]:
+        """把已解决通知重新放回活跃队列。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            repository.reopen_notification_event(
+                event_id=event_id,
+                note=note,
+                reset_acknowledgement=bool(self.settings.notification.reopen_resets_acknowledgement),
+            )
+            refreshed = repository.fetch_recent_notification_events(limit=200)
+        matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
+        return {"notification": matched}
+
+    def batch_reopen_notifications(self, event_ids: list[str], note: str = "") -> dict[str, object]:
+        """批量把已解决通知重新放回活跃队列。"""
+        normalized = [item.strip() for item in event_ids if item.strip()]
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            for event_id in normalized:
+                repository.reopen_notification_event(
+                    event_id=event_id,
+                    note=note,
+                    reset_acknowledgement=bool(self.settings.notification.reopen_resets_acknowledgement),
+                )
+            refreshed = repository.fetch_recent_notification_events(limit=500)
+        return {
+            "processed": len(normalized),
+            "notifications": self._match_notifications_by_event_ids(normalized, refreshed),
+        }
 
     def escalate_notifications(self, limit: int = 50) -> dict[str, object]:
         """把长时间未确认的高优先级通知标记成已升级。"""
@@ -759,6 +944,7 @@ class QuantTradeApp:
         这样一来，后续哪怕换成真实 Telegram/微信 provider，
         也只需要替换 adapter，而不用回头修改业务侧的通知生成逻辑。
         """
+        self._maybe_reconcile_runtime_state()
         max_delivery_attempts = max(int(self.settings.notification.max_delivery_attempts), 1)
         with database_lock(self.settings.data.duckdb_path):
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
@@ -866,8 +1052,14 @@ class QuantTradeApp:
     def dashboard_history(self, runs_limit: int = 20, events_limit: int = 20) -> dict[str, object]:
         """把历史数据整理成前端更容易消费的结构。"""
         with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             bundle = repository.fetch_history_bundle(runs_limit=runs_limit, events_limit=events_limit)
+            runtime_reconcile_preview = {
+                "repaired_assignment_timestamps": repository.count_notification_assignment_backfill_candidates(),
+                "repaired_resolution_acknowledgements": repository.count_notification_resolution_ack_backfill_candidates(),
+                "recovered_stale_executions": repository.count_stale_executions(),
+            }
             return build_history_payload(
                 bundle["runs"],
                 bundle["executions"],
@@ -875,7 +1067,14 @@ class QuantTradeApp:
                 bundle["audit_events"],
                 bundle["notification_events"],
                 notification_assignment_sla_seconds=self.settings.notification.assignment_sla_seconds,
+                notification_assignment_sla_overrides=self._notification_assignment_sla_overrides(),
+                runtime_reconcile_preview=runtime_reconcile_preview,
             )
+
+    def controller_health(self, runs_limit: int = 20, events_limit: int = 50) -> dict[str, object]:
+        """输出控制器当前最值得优先排查的健康视图。"""
+        history_payload = self.dashboard_history(runs_limit=runs_limit, events_limit=events_limit)
+        return {"controller_health": history_payload["controller_health"]}
 
     def export_backtest(
         self,

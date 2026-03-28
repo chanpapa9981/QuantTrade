@@ -116,6 +116,8 @@
 | W-063 | 通知 / Dashboard / CLI | 增加 owner 负载汇总视图 | 支持 `notification-owner-summary`、按 owner 聚合未确认/升级/高优先级告警，以及 history `Notification Owners` 面板 | 已完成 |
 | W-064 | 通知 / Dashboard / CLI | 增加 assignment SLA 过期视图 | 支持 `assignment_sla_seconds`、`notification-sla`、history `Notification SLA` 面板和 SLA Breached 统计 | 已完成 |
 | W-065 | 通知 / Dashboard / CLI | 增加通知已解决（resolve）语义 | 支持 `notification-resolve`、resolved_at/resolved_note、Active/Resolved 统计，以及 resolved 告警自动退出 SLA/活跃待办 | 已完成 |
+| W-066 | 通知 / Dashboard / CLI | 增加批量通知动作与分级 SLA | 支持 batch ack/assign/resolve、warning/error/critical 级别 SLA 覆写，以及 history `SLA Source` 展示 | 已完成 |
+| W-067 | 稳定性 / CLI | 增加控制器失败类别策略与运行时 reconcile | 支持按失败类名决定 retryable/non-retryable、`reconcile-runtime` 修复残留 running execution 和通知时间戳不一致 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -848,6 +850,54 @@
 | 为什么这么做 | 因为真实运行时最常见的困扰不是“没有状态”，而是“状态太粗”。如果只有 ack，没有 resolve，你最后只能知道“我看过它”，却不能知道“我是不是已经真正处理完了”。把 resolve 补进去后，待办视图、SLA 视图和 owner 负载才会更接近真实运维工作流。 |
 | 未完成 | 批量 resolve、resolve 后自动二次通知、按类别自动归档、关闭原因模板、外部工单系统同步 |
 | 备注 | 这一轮把通知层从“可看、可分派、可超时”推进成了“可完成闭环”的更成熟运维状态机 |
+
+### 2026-03-28 第 49 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把通知工作流从“单条点操作”升级成“能批量清队列、还能按严重级别使用不同 SLA” |
+| 输入 | 已有单条 ack/assign/resolve 和默认 SLA，但真实运行时仍会遇到两个痛点：告警要一条条点，效率低；warning/error/critical 明明重要程度不同，却还共用同一个 SLA 阈值 |
+| 产出 | `notification-batch-ack` / `notification-batch-assign` / `notification-batch-resolve`；`assignment_sla_warning_seconds` / `assignment_sla_error_seconds` / `assignment_sla_critical_seconds`；SLA 行里的 `sla_source`；对应测试 |
+| 结果 | 现在可以一次处理多条告警；同时 critical 告警可以比 warning 更早进入逾期视图，不再只能依赖一个全局默认 SLA |
+| 为什么这么做 | 因为真实环境里效率问题通常不是“能不能操作”，而是“能不能成批操作”；优先级问题也不是“有没有 SLA”，而是“不同严重级别该不该共享同一条 SLA”。把批量动作和分级 SLA 一起补上后，通知系统才更接近真实值班场景，而不是演示型单条流程。 |
+| 未完成 | 批量按过滤条件选择、按类别定制 SLA、自动 digest、外部通知渠道真正发送 |
+| 备注 | 这一轮把通知层从“可闭环”推进成了“可批量操作、可按优先级分时效”的更实用值班台 |
+
+### 2026-03-28 第 50 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 深化运行控制器，让它不只会“看异常类型继承关系”，还会按失败类名配置策略，并在写路径开始前主动修复常见残留状态 |
+| 输入 | 已有 retryable/non-retryable 分类和 stale execution recovery，但控制器仍偏硬编码，且历史库里可能残留 assigned_at 缺失、resolved 但未 ack、running 未收口等不一致状态 |
+| 产出 | `retryable_failure_classes` / `non_retryable_failure_classes` / `reconcile_on_write` 配置；`reconcile-runtime` CLI；`recover_all_stale_executions`、通知时间戳回填修复；控制器按失败类名决策重试；对应测试 |
+| 结果 | 现在控制器可以通过配置把某个失败类名直接视作可重试；同时在关键写路径前，会自动修正常见残留状态，避免下一轮运行建立在脏状态上 |
+| 为什么这么做 | 因为真正的控制器深化，不只是多加几条 if，而是把“决策依据”从代码硬写提升到配置可控，并且承认真实系统会积累状态残留。只有同时补上策略映射和启动修复，控制器才开始像一个长期运行的系统，而不是一次性脚本。 |
+| 未完成 | 更细的 failure class 到保护模式动作映射、按类别配置不同 backoff、request 级幂等校验、真正的 live runner 恢复状态机 |
+| 备注 | 这一轮把运行控制层从“有重试和保护模式”推进成了“更可配置、会自修复”的更成熟控制器骨架 |
+
+### 2026-03-28 第 51 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 把通知闭环从“能关闭”补成“能重开、能回到活跃队列”，并给值班页一个真正的 inbox 视图 |
+| 输入 | 已有 ack / assign / resolve / SLA / owner workload，但真实环境里仍会遇到一个关键场景：问题被认为已解决后又再次出现；如果没有 reopen 语义，就只能新建一条告警，既割裂上下文，也不利于看这条问题反复出现了多少次 |
+| 产出 | `notification-reopen` / `notification-batch-reopen` / `notification-inbox` CLI；`reopened_at` / `reopened_note` / `reopen_count` 字段；history 页 `Notification Inbox`、`Reopened Alerts` 卡片、`Reopen Count` 列；对应测试 |
+| 结果 | 现在一条通知不只是“创建 -> 确认 -> 分派 -> 解决”，还可以在问题复发时被 reopen，重新回到活跃待办，同时保留原有 `event_id` 和责任上下文；值班页也能直接看到当前活跃 inbox，而不必自己从全部通知里手动筛出未解决项 |
+| 为什么这么做 | 因为真实运行环境里，很多问题不是一次性线性处理完，而是“修好了、又复发、再处理”。如果系统没有 reopen，历史会被拆碎，operator 很难判断这是新问题还是旧问题复发。把 reopen 和 inbox 一起补上后，通知系统才真正具备了“事件生命周期闭环”，而不是只有一个单向关闭动作。 |
+| 未完成 | reopen 后按类别自动重新分派、重复 reopen 的自动升级、真正外部渠道回执、通知模板系统 |
+| 备注 | 这一轮把通知层从“可关闭闭环”推进成了“可重开闭环”，更接近真实值班场景 |
+
+### 2026-03-28 第 52 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 深化控制器，让它不只会重试和恢复，还能在运行前预览脏状态、输出健康摘要，并对特定失败类别立即触发保护模式 |
+| 输入 | 已有 retryable/non-retryable 类别配置和 reconcile on write，但还缺少两个现实能力：一是 operator 无法先看到“还有多少脏状态等着修”；二是某些失败类别即使只发生一次，也应该立刻阻断后续运行，而不是继续依赖连续失败阈值 |
+| 产出 | `preview_runtime_reconcile` / `reconcile-runtime --dry-run`；`controller-health` CLI 与 history `Controller Health` 面板；`protection_trigger_failure_classes` 配置；stale execution / 回填候选计数；即时保护模式触发测试 |
+| 结果 | 现在控制器在真正修复前，可以先告诉你“还有多少 running 残留、多少 assignment/ack 时间戳缺失”；同时像 `DataCorruptionError` 这类被配置成即时保护触发器的失败，只要出现一次，下一次启动就会直接进入保护模式并说明原因 |
+| 为什么这么做 | 因为稳定性建设的关键，不只是“出错后怎么办”，还包括“我现在的系统健康状态到底怎样”和“哪些错误严重到不该再继续试”。dry-run 预览解决的是可观测性问题，立即保护触发解决的是风险响应速度问题，两者合起来，控制器才开始从“脚本式控制流”进化成真正的运行控制器。 |
+| 未完成 | 更细的 failure class 动作矩阵、不同 failure class 的差异化 cooldown、live runner 重启恢复、券商对账后的保护触发 |
+| 备注 | 这一轮把控制器从“会重试、会修复”推进成了“会预判、会自检、会对高风险失败立即收手”的更成熟骨架 |
 
 ---
 

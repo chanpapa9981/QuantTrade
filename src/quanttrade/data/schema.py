@@ -105,7 +105,10 @@ def create_schema(db_path: str) -> None:
                 assigned_at TEXT NOT NULL DEFAULT '',
                 assignment_note TEXT NOT NULL DEFAULT '',
                 resolved_at TEXT NOT NULL DEFAULT '',
-                resolved_note TEXT NOT NULL DEFAULT ''
+                resolved_note TEXT NOT NULL DEFAULT '',
+                reopened_at TEXT NOT NULL DEFAULT '',
+                reopened_note TEXT NOT NULL DEFAULT '',
+                reopen_count INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS account_snapshots (
@@ -175,6 +178,9 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS assignment_note TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS resolved_at TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS resolved_note TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS reopened_at TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS reopened_note TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS reopen_count INTEGER DEFAULT 0;")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS request_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS attempt_number INTEGER DEFAULT 1;")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS recovered_execution_count INTEGER DEFAULT 0;")

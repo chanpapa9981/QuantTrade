@@ -40,6 +40,10 @@ execution:
   protection_mode_failure_threshold: 2
   protection_mode_cooldown_seconds: 0
   skip_run_on_protection_mode: true
+  retryable_failure_classes: RetryableExecutionError
+  non_retryable_failure_classes: NonRetryableExecutionError
+  protection_trigger_failure_classes: ""
+  reconcile_on_write: true
 
 notification:
   provider: telegram
@@ -56,3 +60,7 @@ notification:
   escalation_window_seconds: 0
   escalation_min_severity: critical
   assignment_sla_seconds: 0
+  assignment_sla_warning_seconds: 0
+  assignment_sla_error_seconds: 0
+  assignment_sla_critical_seconds: 0
+  reopen_resets_acknowledgement: true

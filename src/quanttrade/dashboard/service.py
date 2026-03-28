@@ -8,6 +8,13 @@ from __future__ import annotations
 from collections import Counter
 from datetime import UTC, datetime
 
+_NOTIFICATION_SEVERITY_PRIORITY = {
+    "critical": 4,
+    "error": 3,
+    "warning": 2,
+    "info": 1,
+}
+
 
 def _format_config_sections(
     settings: dict[str, dict[str, object]],
@@ -184,6 +191,7 @@ def _build_notification_owner_summary(notification_events: list[dict[str, object
                 "event_count": 0,
                 "active_count": 0,
                 "resolved_count": 0,
+                "reopened_count": 0,
                 "unacknowledged_count": 0,
                 "escalated_count": 0,
                 "open_high_priority_count": 0,
@@ -192,6 +200,8 @@ def _build_notification_owner_summary(notification_events: list[dict[str, object
         )
         current["event_count"] = int(current.get("event_count", 0)) + 1
         resolved = bool(str(event.get("resolved_at", "")).strip())
+        if int(event.get("reopen_count", 0)) > 0:
+            current["reopened_count"] = int(current.get("reopened_count", 0)) + 1
         if resolved:
             current["resolved_count"] = int(current.get("resolved_count", 0)) + 1
         else:
@@ -220,12 +230,166 @@ def _build_notification_owner_summary(notification_events: list[dict[str, object
     return rows
 
 
+def _build_notification_inbox(notification_events: list[dict[str, object]]) -> list[dict[str, object]]:
+    """把活跃通知整理成更接近日常值班的 inbox 视图。"""
+    now = datetime.now(UTC)
+    rows: list[dict[str, object]] = []
+    for event in notification_events:
+        if str(event.get("resolved_at", "")).strip():
+            continue
+        anchor_text = str(event.get("reopened_at", "")).strip() or str(event.get("timestamp", "")).strip()
+        if not anchor_text:
+            continue
+        try:
+            anchor_at = datetime.fromisoformat(anchor_text)
+        except ValueError:
+            continue
+        severity = str(event.get("severity", "")).strip().lower()
+        age_seconds = int((now - anchor_at).total_seconds())
+        rows.append(
+            {
+                "event_id": str(event.get("event_id", "")),
+                "owner": str(event.get("assigned_to", "")).strip() or "(unassigned)",
+                "severity": str(event.get("severity", "")),
+                "category": str(event.get("category", "")),
+                "title": str(event.get("title", "")),
+                "delivery_status": str(event.get("delivery_status", "")),
+                "active_since": anchor_text,
+                "age_seconds": age_seconds,
+                "ack_state": "acked" if str(event.get("acknowledged_at", "")).strip() else "unacked",
+                "escalated": bool(str(event.get("escalated_at", "")).strip()),
+                "reopened": int(event.get("reopen_count", 0)) > 0,
+                "reopen_count": int(event.get("reopen_count", 0)),
+                "next_delivery_attempt_at": str(event.get("next_delivery_attempt_at", "")),
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            -int(bool(item.get("escalated"))),
+            -_NOTIFICATION_SEVERITY_PRIORITY.get(str(item.get("severity", "")).strip().lower(), 0),
+            -int(item.get("age_seconds", 0)),
+            str(item.get("owner", "")),
+        )
+    )
+    return rows
+
+
+def _build_controller_health(
+    *,
+    execution_requests: list[dict[str, object]],
+    notification_events: list[dict[str, object]],
+    notification_sla_summary: list[dict[str, object]],
+    runtime_reconcile_preview: dict[str, int] | None = None,
+) -> dict[str, object]:
+    """把控制器最需要优先关注的健康项压成统一视图。"""
+    runtime_reconcile_preview = runtime_reconcile_preview or {}
+    unacknowledged_critical = len(
+        [
+            item
+            for item in notification_events
+            if item.get("severity") == "critical"
+            and not str(item.get("resolved_at", "")).strip()
+            and not str(item.get("acknowledged_at", "")).strip()
+        ]
+    )
+    blocked_requests = len([item for item in execution_requests if item.get("blocked")])
+    cooldown_requests = len([item for item in execution_requests if item.get("cooldown_active")])
+    critical_requests = len([item for item in execution_requests if item.get("health_label") == "critical"])
+    watch_requests = len([item for item in execution_requests if item.get("health_label") == "watch"])
+    stale_execution_candidates = int(runtime_reconcile_preview.get("recovered_stale_executions", 0))
+    assignment_backfill_candidates = int(runtime_reconcile_preview.get("repaired_assignment_timestamps", 0))
+    resolution_backfill_candidates = int(runtime_reconcile_preview.get("repaired_resolution_acknowledgements", 0))
+    reconcile_candidates = stale_execution_candidates + assignment_backfill_candidates + resolution_backfill_candidates
+
+    issues: list[dict[str, object]] = []
+
+    def add_issue(*, code: str, severity: str, count: int, detail: str) -> None:
+        if count <= 0:
+            return
+        issues.append(
+            {
+                "code": code,
+                "severity": severity,
+                "count": count,
+                "detail": detail,
+            }
+        )
+
+    add_issue(
+        code="stale_execution_candidates",
+        severity="critical",
+        count=stale_execution_candidates,
+        detail="running execution 残留，需要 reconcile 或启动恢复处理。",
+    )
+    add_issue(
+        code="blocked_requests",
+        severity="critical",
+        count=blocked_requests,
+        detail="有 request 已被保护模式拦截，通常说明需要人工复核失败根因。",
+    )
+    add_issue(
+        code="unacknowledged_critical_notifications",
+        severity="critical",
+        count=unacknowledged_critical,
+        detail="存在 critical 告警仍未确认，应该优先处理。",
+    )
+    add_issue(
+        code="sla_breached_notifications",
+        severity="warning",
+        count=len(notification_sla_summary),
+        detail="已分派但超出 SLA 的告警仍未被确认。",
+    )
+    add_issue(
+        code="cooldown_protected_requests",
+        severity="warning",
+        count=cooldown_requests,
+        detail="保护模式冷却尚未结束，新的执行仍可能被阻断。",
+    )
+    add_issue(
+        code="critical_requests",
+        severity="warning",
+        count=critical_requests,
+        detail="存在 request 链已经进入 critical 健康状态。",
+    )
+    add_issue(
+        code="watch_requests",
+        severity="info",
+        count=watch_requests,
+        detail="存在需要继续观察的 request 链，例如刚重试或刚恢复。",
+    )
+    add_issue(
+        code="runtime_reconcile_candidates",
+        severity="info",
+        count=reconcile_candidates,
+        detail="数据库里还存在可自动修复的不一致状态。",
+    )
+
+    severity_rank = {"critical": 3, "warning": 2, "info": 1}
+    issues.sort(key=lambda item: (-severity_rank.get(str(item.get("severity", "")), 0), -int(item.get("count", 0)), str(item.get("code", ""))))
+
+    return {
+        "summary": {
+            "blocked_requests": blocked_requests,
+            "cooldown_requests": cooldown_requests,
+            "critical_requests": critical_requests,
+            "watch_requests": watch_requests,
+            "unacknowledged_critical_notifications": unacknowledged_critical,
+            "sla_breached_notifications": len(notification_sla_summary),
+            "stale_execution_candidates": stale_execution_candidates,
+            "reconcile_candidates": reconcile_candidates,
+        },
+        "issues": issues[:8],
+    }
+
+
 def _build_notification_sla_summary(
     notification_events: list[dict[str, object]],
     assignment_sla_seconds: int,
+    severity_sla_overrides: dict[str, int] | None = None,
 ) -> list[dict[str, object]]:
     """计算已分派但仍未确认的 SLA 超时告警。"""
-    if assignment_sla_seconds <= 0:
+    severity_sla_overrides = severity_sla_overrides or {}
+    if assignment_sla_seconds <= 0 and not any(value > 0 for value in severity_sla_overrides.values()):
         return []
 
     now = datetime.now(UTC)
@@ -244,8 +408,12 @@ def _build_notification_sla_summary(
             anchor_at = datetime.fromisoformat(anchor_text)
         except ValueError:
             continue
+        severity = str(event.get("severity", "")).strip().lower()
+        effective_sla_seconds = max(int(severity_sla_overrides.get(severity, 0)), 0) or max(int(assignment_sla_seconds), 0)
+        if effective_sla_seconds <= 0:
+            continue
         age_seconds = int((now - anchor_at).total_seconds())
-        if age_seconds < assignment_sla_seconds:
+        if age_seconds < effective_sla_seconds:
             continue
         rows.append(
             {
@@ -256,8 +424,9 @@ def _build_notification_sla_summary(
                 "title": str(event.get("title", "")),
                 "assigned_at": anchor_text,
                 "age_seconds": age_seconds,
-                "sla_seconds": assignment_sla_seconds,
-                "breach_seconds": age_seconds - assignment_sla_seconds,
+                "sla_seconds": effective_sla_seconds,
+                "sla_source": severity if severity_sla_overrides.get(severity, 0) else "default",
+                "breach_seconds": age_seconds - effective_sla_seconds,
             }
         )
     rows.sort(
@@ -463,6 +632,8 @@ def build_history_payload(
     audit_events: list[dict[str, object]],
     notification_events: list[dict[str, object]],
     notification_assignment_sla_seconds: int = 0,
+    notification_assignment_sla_overrides: dict[str, int] | None = None,
+    runtime_reconcile_preview: dict[str, int] | None = None,
 ) -> dict[str, object]:
     """把历史运行结果整理成历史页所需的聚合结构。"""
     latest_run = runs[0] if runs else {}
@@ -472,9 +643,17 @@ def build_history_payload(
     execution_request_details = _build_execution_request_details(executions)
     notification_summary = _build_notification_summary(notification_events)
     notification_owner_summary = _build_notification_owner_summary(notification_events)
+    notification_inbox = _build_notification_inbox(notification_events)
     notification_sla_summary = _build_notification_sla_summary(
         notification_events,
         assignment_sla_seconds=max(int(notification_assignment_sla_seconds), 0),
+        severity_sla_overrides=notification_assignment_sla_overrides or {},
+    )
+    controller_health = _build_controller_health(
+        execution_requests=execution_requests,
+        notification_events=notification_events,
+        notification_sla_summary=notification_sla_summary,
+        runtime_reconcile_preview=runtime_reconcile_preview or {},
     )
     request_anomalies = sorted(
         [item for item in execution_requests if item.get("anomaly_score", 0) > 0],
@@ -538,6 +717,9 @@ def build_history_payload(
             "resolved_notifications": len(
                 [item for item in notification_events if str(item.get("resolved_at", "")).strip()]
             ),
+            "reopened_notifications": len(
+                [item for item in notification_events if int(item.get("reopen_count", 0)) > 0]
+            ),
             "active_notifications": len(
                 [item for item in notification_events if not str(item.get("resolved_at", "")).strip()]
             ),
@@ -558,6 +740,13 @@ def build_history_payload(
                 ]
             ),
             "sla_breached_notifications": len(notification_sla_summary),
+            "controller_health_issues": len(controller_health["issues"]),
+            "stale_execution_candidates": int((runtime_reconcile_preview or {}).get("recovered_stale_executions", 0)),
+            "runtime_reconcile_candidates": (
+                int((runtime_reconcile_preview or {}).get("recovered_stale_executions", 0))
+                + int((runtime_reconcile_preview or {}).get("repaired_assignment_timestamps", 0))
+                + int((runtime_reconcile_preview or {}).get("repaired_resolution_acknowledgements", 0))
+            ),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),
@@ -585,7 +774,9 @@ def build_history_payload(
         "recent_executions": executions,
         "notification_summary": notification_summary[:8],
         "notification_owner_summary": notification_owner_summary[:8],
+        "notification_inbox": notification_inbox[:12],
         "notification_sla_summary": notification_sla_summary[:8],
+        "controller_health": controller_health,
         "order_lifecycles": order_lifecycles,
         "order_lifecycle_details": order_lifecycle_details,
         "recent_orders": orders,

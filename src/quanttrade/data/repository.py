@@ -142,8 +142,61 @@ class BacktestRunRepository:
         timeframe: str,
         protection_mode_failure_threshold: int,
         protection_mode_cooldown_seconds: int,
+        protection_trigger_failure_classes: set[str] | None = None,
     ) -> dict[str, object]:
         """根据连续失败和冷却窗口，判断下一次 execution 启动是否仍应被保护模式拦截。"""
+        trigger_classes = {item.strip() for item in (protection_trigger_failure_classes or set()) if item.strip()}
+        if trigger_classes:
+            placeholders = ", ".join("?" for _ in trigger_classes)
+            trigger_row = connection.execute(
+                f"""
+                SELECT failure_class,
+                       COALESCE(NULLIF(finished_at, ''), started_at) AS reference_at
+                FROM backtest_executions
+                WHERE symbol = ? AND timeframe = ?
+                  AND status IN ('failed', 'blocked')
+                  AND failure_class IN ({placeholders})
+                ORDER BY reference_at DESC
+                LIMIT 1
+                """,
+                (symbol, timeframe, *sorted(trigger_classes)),
+            ).fetchone()
+            if trigger_row is not None and str(trigger_row[0]).strip():
+                trigger_failure_class = str(trigger_row[0]).strip()
+                reference_text = str(trigger_row[1] or "").strip()
+                if protection_mode_cooldown_seconds <= 0 or not reference_text:
+                    return {
+                        "consecutive_failures": self._consecutive_failure_count(connection, symbol, timeframe),
+                        "protection_mode": 1,
+                        "protection_reason": (
+                            f"entered protection mode because failure class {trigger_failure_class} "
+                            "is configured as an immediate protection trigger"
+                        ),
+                        "protection_cooldown_until": "",
+                    }
+                reference_at = datetime.fromisoformat(reference_text)
+                cooldown_until = reference_at + timedelta(seconds=max(int(protection_mode_cooldown_seconds), 0))
+                cooldown_until_iso = cooldown_until.isoformat()
+                if cooldown_until > datetime.now(UTC):
+                    return {
+                        "consecutive_failures": self._consecutive_failure_count(connection, symbol, timeframe),
+                        "protection_mode": 1,
+                        "protection_reason": (
+                            f"entered protection mode because failure class {trigger_failure_class} "
+                            f"is configured as an immediate protection trigger; cooldown active until {cooldown_until_iso}"
+                        ),
+                        "protection_cooldown_until": cooldown_until_iso,
+                    }
+                return {
+                    "consecutive_failures": self._consecutive_failure_count(connection, symbol, timeframe),
+                    "protection_mode": 0,
+                    "protection_reason": (
+                        f"protection cooldown expired at {cooldown_until_iso}; allowing resume after immediate trigger "
+                        f"failure class {trigger_failure_class}"
+                    ),
+                    "protection_cooldown_until": cooldown_until_iso,
+                }
+
         consecutive_failures = self._consecutive_failure_count(connection, symbol, timeframe)
         threshold = max(int(protection_mode_failure_threshold), 1)
         cooldown_seconds = max(int(protection_mode_cooldown_seconds), 0)
@@ -408,6 +461,7 @@ class BacktestRunRepository:
         recovered_execution_count: int = 0,
         protection_mode_failure_threshold: int = 2,
         protection_mode_cooldown_seconds: int = 0,
+        protection_trigger_failure_classes: set[str] | None = None,
     ) -> str:
         """创建一条新的回测执行记录。
 
@@ -433,6 +487,7 @@ class BacktestRunRepository:
                 timeframe,
                 protection_mode_failure_threshold=protection_mode_failure_threshold,
                 protection_mode_cooldown_seconds=protection_mode_cooldown_seconds,
+                protection_trigger_failure_classes=protection_trigger_failure_classes,
             )
             connection.execute(
                 """
@@ -645,7 +700,8 @@ class BacktestRunRepository:
                        escalated_at, escalation_level, escalation_reason,
                        symbol, timeframe, run_id, execution_id, request_id,
                        assigned_to, assigned_at, assignment_note,
-                       resolved_at, resolved_note
+                       resolved_at, resolved_note,
+                       reopened_at, reopened_note, reopen_count
                 FROM notification_events
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -688,6 +744,9 @@ class BacktestRunRepository:
                 "assignment_note": row[29],
                 "resolved_at": row[30],
                 "resolved_note": row[31],
+                "reopened_at": row[32],
+                "reopened_note": row[33],
+                "reopen_count": row[34],
             }
             for row in rows
         ]
@@ -714,7 +773,8 @@ class BacktestRunRepository:
                        escalated_at, escalation_level, escalation_reason,
                        symbol, timeframe, run_id, execution_id, request_id,
                        assigned_to, assigned_at, assignment_note,
-                       resolved_at, resolved_note
+                       resolved_at, resolved_note,
+                       reopened_at, reopened_note, reopen_count
                 FROM notification_events
                 WHERE notification_key = ?
                   AND silenced_until >= ?
@@ -760,6 +820,9 @@ class BacktestRunRepository:
             "assignment_note": row[29],
             "resolved_at": row[30],
             "resolved_note": row[31],
+            "reopened_at": row[32],
+            "reopened_note": row[33],
+            "reopen_count": row[34],
         }
 
     def mark_notification_duplicate_suppressed(
@@ -814,7 +877,8 @@ class BacktestRunRepository:
                        escalated_at, escalation_level, escalation_reason,
                        symbol, timeframe, run_id, execution_id, request_id,
                        assigned_to, assigned_at, assignment_note,
-                       resolved_at, resolved_note
+                       resolved_at, resolved_note,
+                       reopened_at, reopened_note, reopen_count
                 FROM notification_events
                 WHERE delivery_status IN ('queued', 'delivery_failed_retryable')
                   AND delivery_attempts < ?
@@ -860,6 +924,9 @@ class BacktestRunRepository:
                 "assignment_note": row[29],
                 "resolved_at": row[30],
                 "resolved_note": row[31],
+                "reopened_at": row[32],
+                "reopened_note": row[33],
+                "reopen_count": row[34],
             }
             for row in rows
         ]
@@ -953,6 +1020,66 @@ class BacktestRunRepository:
         finally:
             connection.close()
 
+    def reopen_notification_event(
+        self,
+        event_id: str,
+        note: str = "",
+        *,
+        reset_acknowledgement: bool = True,
+    ) -> None:
+        """把已解决通知重新放回活跃队列。
+
+        reopen 表达的是“问题曾经被认为处理完，但后来又重新出现”。
+        这里默认顺手清空 acknowledgement，是为了让这条通知重新回到
+        “需要人工确认”的队列里，而不是表面上 active 了却仍被当成已读。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            if reset_acknowledgement:
+                connection.execute(
+                    """
+                    UPDATE notification_events
+                    SET resolved_at = '',
+                        resolved_note = '',
+                        acknowledged_at = '',
+                        acknowledged_note = '',
+                        escalated_at = '',
+                        escalation_level = '',
+                        escalation_reason = '',
+                        reopened_at = ?,
+                        reopened_note = ?,
+                        reopen_count = reopen_count + 1
+                    WHERE event_id = ?
+                    """,
+                    (
+                        datetime.now(UTC).isoformat(),
+                        note[:500],
+                        event_id[:80],
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE notification_events
+                    SET resolved_at = '',
+                        resolved_note = '',
+                        escalated_at = '',
+                        escalation_level = '',
+                        escalation_reason = '',
+                        reopened_at = ?,
+                        reopened_note = ?,
+                        reopen_count = reopen_count + 1
+                    WHERE event_id = ?
+                    """,
+                    (
+                        datetime.now(UTC).isoformat(),
+                        note[:500],
+                        event_id[:80],
+                    ),
+                )
+        finally:
+            connection.close()
+
     def mark_notification_delivery_result(
         self,
         *,
@@ -1029,6 +1156,169 @@ class BacktestRunRepository:
                 ),
             )
             return len(rows)
+        finally:
+            connection.close()
+
+    def recover_all_stale_executions(self) -> int:
+        """全局修复所有残留的 running execution。
+
+        这个方法主要给启动修复和控制器自检使用。
+        它不区分 symbol/timeframe，而是把所有明显不应该继续停留在 running 的记录统一修正为 abandoned。
+        """
+        connection = connect_database(self.db_path)
+        finished_at = datetime.now(UTC).isoformat()
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "backtest_executions" for table in tables):
+                return 0
+            pending_rows = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM backtest_executions
+                WHERE status = 'running'
+                """
+            ).fetchone()
+            pending_count = int(pending_rows[0]) if pending_rows else 0
+            if pending_count <= 0:
+                return 0
+            connection.execute(
+                """
+                UPDATE backtest_executions
+                SET status = 'abandoned',
+                    finished_at = ?,
+                    error_message = CASE
+                        WHEN error_message = '' THEN 'recovered stale execution on controller reconcile'
+                        ELSE error_message
+                    END
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            return pending_count
+        finally:
+            connection.close()
+
+    def count_stale_executions(self) -> int:
+        """统计仍停留在 running 的 execution 数量。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "backtest_executions" for table in tables):
+                return 0
+            row = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM backtest_executions
+                WHERE status = 'running'
+                """
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            connection.close()
+
+    def count_notification_assignment_backfill_candidates(self) -> int:
+        """统计 assigned 但缺少 assigned_at 的通知数量。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "notification_events" for table in tables):
+                return 0
+            row = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM notification_events
+                WHERE assigned_to <> ''
+                  AND assigned_at = ''
+                """
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            connection.close()
+
+    def count_notification_resolution_ack_backfill_candidates(self) -> int:
+        """统计 resolved 但缺少 acknowledged_at 的通知数量。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "notification_events" for table in tables):
+                return 0
+            row = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM notification_events
+                WHERE resolved_at <> ''
+                  AND acknowledged_at = ''
+                """
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            connection.close()
+
+    def backfill_notification_assigned_at(self) -> int:
+        """给缺失 `assigned_at` 的已分派通知回填时间。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "notification_events" for table in tables):
+                return 0
+            pending_rows = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM notification_events
+                WHERE assigned_to <> ''
+                  AND assigned_at = ''
+                """
+            ).fetchone()
+            pending_count = int(pending_rows[0]) if pending_rows else 0
+            if pending_count <= 0:
+                return 0
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_at = timestamp
+                WHERE assigned_to <> ''
+                  AND assigned_at = ''
+                """
+            )
+            return pending_count
+        finally:
+            connection.close()
+
+    def backfill_notification_acknowledged_at_from_resolution(self) -> int:
+        """把已解决但未确认的通知补上确认时间。
+
+        resolve 比 ack 更强，所以如果历史数据里出现“已解决但没有 ack”，
+        这里会把 resolve 时间作为最保守的确认时间补进去。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "notification_events" for table in tables):
+                return 0
+            pending_rows = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM notification_events
+                WHERE resolved_at <> ''
+                  AND acknowledged_at = ''
+                """
+            ).fetchone()
+            pending_count = int(pending_rows[0]) if pending_rows else 0
+            if pending_count <= 0:
+                return 0
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET acknowledged_at = resolved_at,
+                    acknowledged_note = CASE
+                        WHEN acknowledged_note = '' THEN 'auto-acknowledged from resolved notification'
+                        ELSE acknowledged_note
+                    END
+                WHERE resolved_at <> ''
+                  AND acknowledged_at = ''
+                """
+            )
+            return pending_count
         finally:
             connection.close()
 
@@ -1767,7 +2057,8 @@ class BacktestRunRepository:
                            escalated_at, escalation_level, escalation_reason,
                            symbol, timeframe, run_id, execution_id, request_id,
                            assigned_to, assigned_at, assignment_note,
-                           resolved_at, resolved_note
+                           resolved_at, resolved_note,
+                           reopened_at, reopened_note, reopen_count
                     FROM notification_events
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -1808,6 +2099,9 @@ class BacktestRunRepository:
                         "assignment_note": row[29],
                         "resolved_at": row[30],
                         "resolved_note": row[31],
+                        "reopened_at": row[32],
+                        "reopened_note": row[33],
+                        "reopen_count": row[34],
                     }
                     for row in notification_rows
                 ]
