@@ -50,10 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_html_parser.add_argument("--output", default="var/reports/dashboard.html", help="Output HTML path")
     runs_parser = subparsers.add_parser("runs", help="List recent persisted backtest runs")
     runs_parser.add_argument("--limit", type=int, default=10, help="Number of runs to list")
+    execution_requests_parser = subparsers.add_parser("execution-requests", help="List recent request-level execution chains")
+    execution_requests_parser.add_argument("--limit", type=int, default=10, help="Number of request chains to list")
     executions_parser = subparsers.add_parser("executions", help="List recent backtest execution attempts")
     executions_parser.add_argument("--limit", type=int, default=10, help="Number of executions to list")
     execution_detail_parser = subparsers.add_parser("execution-detail", help="Show one backtest execution detail")
     execution_detail_parser.add_argument("--execution-id", required=True, help="Execution attempt id")
+    execution_request_detail_parser = subparsers.add_parser("execution-request-detail", help="Show one request-level execution chain detail")
+    execution_request_detail_parser.add_argument("--request-id", required=True, help="Execution request id")
     run_detail_parser = subparsers.add_parser("run-detail", help="Show one persisted backtest run detail")
     run_detail_parser.add_argument("--run-id", required=True, help="Persisted run id")
     orders_parser = subparsers.add_parser("orders", help="List recent persisted order events")
@@ -157,12 +161,20 @@ def main() -> None:
         print(json.dumps(app.recent_backtest_runs(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
+    if args.command == "execution-requests":
+        print(json.dumps(app.recent_execution_requests(limit=args.limit), indent=2, ensure_ascii=False))
+        return
+
     if args.command == "executions":
         print(json.dumps(app.recent_backtest_executions(limit=args.limit), indent=2, ensure_ascii=False))
         return
 
     if args.command == "execution-detail":
         print(json.dumps(app.execution_detail(execution_id=args.execution_id), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "execution-request-detail":
+        print(json.dumps(app.execution_request_detail(request_id=args.request_id), indent=2, ensure_ascii=False))
         return
 
     if args.command == "run-detail":

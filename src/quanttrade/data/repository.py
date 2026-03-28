@@ -514,6 +514,145 @@ class BacktestRunRepository:
             else {"run_id": run_id} if run_id else None,
         }
 
+    def fetch_execution_request_detail(self, request_id: str) -> dict[str, object] | None:
+        """查询某一次外部回测请求对应的完整 execution attempt 链。
+
+        这里的重点不是单个 execution，而是同一个 `request_id` 下：
+        - 一共尝试了几次；
+        - 每次尝试的状态如何；
+        - 最终有没有落成 run。
+        """
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            table_names = {table[0] for table in tables}
+            if "backtest_executions" not in table_names:
+                return None
+            rows = connection.execute(
+                """
+                SELECT execution_id, request_id, symbol, timeframe, initial_equity, attempt_number,
+                       recovered_execution_count, consecutive_failures_before_start,
+                       protection_mode, protection_reason, status,
+                       requested_at, started_at, finished_at, run_id, error_message
+                FROM backtest_executions
+                WHERE request_id = ?
+                ORDER BY started_at
+                """,
+                (request_id,),
+            ).fetchall()
+            if not rows:
+                return None
+        finally:
+            connection.close()
+
+        attempts = [
+            {
+                "execution_id": row[0],
+                "request_id": row[1],
+                "symbol": row[2],
+                "timeframe": row[3],
+                "initial_equity": row[4],
+                "attempt_number": row[5],
+                "recovered_execution_count": row[6],
+                "consecutive_failures_before_start": row[7],
+                "protection_mode": bool(row[8]),
+                "protection_reason": row[9],
+                "status": row[10],
+                "requested_at": row[11],
+                "started_at": row[12],
+                "finished_at": row[13],
+                "run_id": row[14],
+                "error_message": row[15],
+            }
+            for row in rows
+        ]
+        latest = attempts[-1]
+        return {
+            "request": {
+                "request_id": request_id,
+                "symbol": latest["symbol"],
+                "timeframe": latest["timeframe"],
+                "attempt_count": len(attempts),
+                "final_status": latest["status"],
+                "latest_execution_id": latest["execution_id"],
+                "run_id": latest["run_id"],
+                "retried": len(attempts) > 1,
+                "blocked": latest["status"] == "blocked",
+                "protection_mode_seen": any(item["protection_mode"] for item in attempts),
+                "requested_at": attempts[0]["requested_at"],
+                "last_updated_at": latest["finished_at"] or latest["started_at"],
+            },
+            "attempts": attempts,
+        }
+
+    def fetch_recent_execution_requests(self, limit: int = 10) -> list[dict[str, object]]:
+        """查询最近几条 request 级执行链摘要。"""
+        connection = connect_database(self.db_path)
+        try:
+            tables = connection.execute("SHOW TABLES").fetchall()
+            if not any(table[0] == "backtest_executions" for table in tables):
+                return []
+            rows = connection.execute(
+                """
+                SELECT execution_id, request_id, symbol, timeframe, initial_equity, attempt_number,
+                       recovered_execution_count, consecutive_failures_before_start,
+                       protection_mode, protection_reason, status,
+                       requested_at, started_at, finished_at, run_id, error_message
+                FROM backtest_executions
+                WHERE request_id != ''
+                ORDER BY started_at DESC
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+
+        grouped: dict[str, list[dict[str, object]]] = {}
+        for row in rows:
+            request_id = str(row[1])
+            grouped.setdefault(request_id, []).append(
+                {
+                    "execution_id": row[0],
+                    "request_id": row[1],
+                    "symbol": row[2],
+                    "timeframe": row[3],
+                    "initial_equity": row[4],
+                    "attempt_number": row[5],
+                    "recovered_execution_count": row[6],
+                    "consecutive_failures_before_start": row[7],
+                    "protection_mode": bool(row[8]),
+                    "protection_reason": row[9],
+                    "status": row[10],
+                    "requested_at": row[11],
+                    "started_at": row[12],
+                    "finished_at": row[13],
+                    "run_id": row[14],
+                    "error_message": row[15],
+                }
+            )
+
+        summaries: list[dict[str, object]] = []
+        for request_id, attempts in grouped.items():
+            ordered = sorted(attempts, key=lambda item: str(item.get("started_at", "")))
+            latest = ordered[-1]
+            summaries.append(
+                {
+                    "request_id": request_id,
+                    "symbol": latest["symbol"],
+                    "timeframe": latest["timeframe"],
+                    "attempt_count": len(ordered),
+                    "final_status": latest["status"],
+                    "latest_execution_id": latest["execution_id"],
+                    "run_id": latest["run_id"],
+                    "retried": len(ordered) > 1,
+                    "blocked": latest["status"] == "blocked",
+                    "protection_mode_seen": any(item["protection_mode"] for item in ordered),
+                    "requested_at": ordered[0]["requested_at"],
+                    "last_updated_at": latest["finished_at"] or latest["started_at"],
+                }
+            )
+        summaries.sort(key=lambda item: str(item.get("last_updated_at", "")), reverse=True)
+        return summaries[:limit]
+
     def fetch_run_detail(self, run_id: str) -> dict[str, object] | None:
         """查询某次回测的完整详情。"""
         connection = connect_database(self.db_path)

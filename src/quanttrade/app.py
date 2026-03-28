@@ -236,11 +236,23 @@ class QuantTradeApp:
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"executions": repository.fetch_recent_executions(limit=limit)}
 
+    def recent_execution_requests(self, limit: int = 10) -> dict[str, object]:
+        """查询最近几条 request 级 execution 链。"""
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"requests": repository.fetch_recent_execution_requests(limit=limit)}
+
     def execution_detail(self, execution_id: str) -> dict[str, object]:
         """查询某次执行尝试的完整详情。"""
         with database_lock(self.settings.data.duckdb_path):
             repository = BacktestRunRepository(self.settings.data.duckdb_path)
             return {"detail": repository.fetch_execution_detail(execution_id=execution_id)}
+
+    def execution_request_detail(self, request_id: str) -> dict[str, object]:
+        """查询某次 request 级执行链的完整详情。"""
+        with database_lock(self.settings.data.duckdb_path):
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            return {"detail": repository.fetch_execution_request_detail(request_id=request_id)}
 
     def backtest_run_detail(self, run_id: str) -> dict[str, object]:
         """查询某次回测的完整明细。"""

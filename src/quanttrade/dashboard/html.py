@@ -705,6 +705,27 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         </section>
 
         <section class="panel">
+          <h2 class="panel-title">Execution Requests</h2>
+          <div class="panel-note">Grouped retry chains keyed by request ID</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Request ID</th>
+                  <th>Run ID</th>
+                  <th>Final</th>
+                  <th>Attempts</th>
+                  <th>Retried</th>
+                  <th>Protected</th>
+                  <th>Path</th>
+                </tr>
+              </thead>
+              <tbody id="request-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2 class="panel-title">Recent Executions</h2>
           <div class="panel-note">Latest controller-level execution attempts, including retries and protection starts</div>
           <div class="toolbar">
@@ -740,6 +761,28 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       </div>
 
       <div class="stack">
+        <section class="panel">
+          <h2 class="panel-title">Execution Request Detail</h2>
+          <div class="panel-note">Inspect one request-level retry chain before drilling into a specific attempt</div>
+          <div id="request-detail-meta" class="muted"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Request ID</th>
+                  <th>Execution ID</th>
+                  <th>Status</th>
+                  <th>Attempt</th>
+                  <th>Run ID</th>
+                  <th>Protection</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="request-detail-table"></tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="panel">
           <h2 class="panel-title">Order Lifecycles</h2>
           <div class="panel-note">Grouped order status paths keyed by order ID</div>
@@ -933,6 +976,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const broker = params.get("broker") || "all";
       const focus = params.get("focus") || "all";
       const executionStatus = params.get("execution_status") || "all";
+      const requestId = params.get("request") || "";
       const executionId = params.get("execution") || "";
       const orderId = params.get("order") || "";
       return {{
@@ -942,6 +986,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         broker: ["all", "pending_new", "working", "replaced", "partially_filled", "filled", "cancelled", "rejected", "local_skipped"].includes(broker) ? broker : "all",
         focus: ["all", "anomalies"].includes(focus) ? focus : "all",
         executionStatus: ["all", "completed", "failed", "blocked", "abandoned", "running", "protection"].includes(executionStatus) ? executionStatus : "all",
+        requestId,
         executionId,
         orderId,
       }};
@@ -956,6 +1001,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       if (state.broker !== "all") params.set("broker", state.broker);
       if (state.focus !== "all") params.set("focus", state.focus);
       if (state.executionStatus !== "all") params.set("execution_status", state.executionStatus);
+      if (state.requestId) params.set("request", state.requestId);
       if (state.executionId) params.set("execution", state.executionId);
       if (state.orderId) params.set("order", state.orderId);
       const hash = params.toString() ? `#${{params.toString()}}` : "";
@@ -985,6 +1031,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       bits.push(`Broker: ${{state.broker}}`);
       bits.push(`Focus: ${{state.focus}}`);
       bits.push(`Execution Filter: ${{state.executionStatus}}`);
+      bits.push(state.requestId ? `Request: ${{state.requestId}}` : "Request: none selected");
       bits.push(`Matches: ${{filteredLifecycleCount()}}`);
       bits.push(state.executionId ? `Execution: ${{state.executionId}}` : "Execution: none selected");
       bits.push(state.orderId ? `Order: ${{state.orderId}}` : "Order: none selected");
@@ -995,6 +1042,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const summary = payload.history_summary;
       const cards = [
         {{ label: "Total Runs", value: summary.total_runs }},
+        {{ label: "Request Chains", value: summary.total_execution_requests }},
+        {{ label: "Retried Requests", value: summary.retried_execution_requests }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
         {{ label: "Execution Blocked", value: summary.blocked_executions }},
@@ -1038,14 +1087,77 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     function findExecution(executionId) {{
       return payload.recent_executions.find(execution => execution.execution_id === executionId);
     }}
+    function findRequest(requestId) {{
+      return payload.execution_requests.find(request => request.request_id === requestId);
+    }}
     function isExecutionAnomaly(execution) {{
       if (!execution) return false;
       return execution.status !== "completed" || execution.protection_mode || Number(execution.recovered_execution_count || 0) > 0;
+    }}
+    function renderRequestChains() {{
+      // request 表负责回答“这几次重试是不是同一轮外部触发”。
+      const rows = payload.execution_requests.filter(request => state.runId === "all" || request.run_id === state.runId);
+      if (!rows.some(request => request.request_id === state.requestId)) {{
+        state.requestId = rows[0]?.request_id ?? "";
+      }}
+      document.getElementById("request-table").innerHTML = rows.map(request => `
+        <tr class="${{state.requestId === request.request_id ? "row-active" : ""}}">
+          <td><button class="link-button" data-request-id="${{request.request_id}}">${{request.request_id}}</button></td>
+          <td>${{request.run_id ? `<button class="link-button" data-request-run-id="${{request.run_id}}">${{request.run_id}}</button>` : ""}}</td>
+          <td>${{request.final_status}}</td>
+          <td>${{fmt(request.attempt_count)}}</td>
+          <td>${{request.retried ? "yes" : "no"}}</td>
+          <td>${{request.protection_mode_seen ? "yes" : "no"}}</td>
+          <td>${{request.attempt_path}}</td>
+        </tr>
+      `).join("");
+      document.querySelectorAll("#request-table [data-request-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          state.requestId = node.getAttribute("data-request-id") || "";
+          renderAll();
+        }});
+      }});
+      document.querySelectorAll("#request-table [data-request-run-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          state.runId = node.getAttribute("data-request-run-id") || "all";
+          renderAll();
+        }});
+      }});
+      renderRequestDetail();
+    }}
+    function renderRequestDetail() {{
+      // request detail 先看整条重试链，再决定点进哪一次具体 execution。
+      const request = findRequest(state.requestId);
+      const attempts = payload.execution_request_details[state.requestId] || [];
+      if (!attempts.some(attempt => attempt.execution_id === state.executionId)) {{
+        state.executionId = attempts[attempts.length - 1]?.execution_id ?? state.executionId;
+      }}
+      document.getElementById("request-detail-meta").textContent = request
+        ? `Request ${{request.request_id}} | Final: ${{request.final_status}} | Attempts: ${{request.attempt_count}} | Retried: ${{request.retried ? "yes" : "no"}} | Protected: ${{request.protection_mode_seen ? "yes" : "no"}}`
+        : "No request selected.";
+      document.getElementById("request-detail-table").innerHTML = attempts.map(attempt => `
+        <tr class="${{state.executionId === attempt.execution_id ? "row-active" : ""}}">
+          <td>${{attempt.request_id}}</td>
+          <td><button class="link-button" data-request-execution-id="${{attempt.execution_id}}">${{attempt.execution_id}}</button></td>
+          <td>${{attempt.status}}</td>
+          <td>${{fmt(attempt.attempt_number)}}</td>
+          <td>${{attempt.run_id || ""}}</td>
+          <td>${{attempt.protection_mode ? "on" : "off"}}</td>
+          <td>${{attempt.error_message || attempt.protection_reason || ""}}</td>
+        </tr>
+      `).join("");
+      document.querySelectorAll("#request-detail-table [data-request-execution-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          state.executionId = node.getAttribute("data-request-execution-id") || "";
+          renderAll();
+        }});
+      }});
     }}
     function renderExecutions() {{
       // 执行表回答的是“这次回测任务本身是否健康”，它和订单表不是同一层。
       const rows = payload.recent_executions.filter(execution => {{
         if (state.runId !== "all" && execution.run_id !== state.runId) return false;
+        if (state.requestId && execution.request_id !== state.requestId) return false;
         if (state.executionStatus === "protection") return Boolean(execution.protection_mode);
         if (state.executionStatus !== "all" && execution.status !== state.executionStatus) return false;
         return true;
@@ -1237,6 +1349,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       syncControlsToState();
       renderContext();
       renderRuns();
+      renderRequestChains();
       renderExecutions();
       renderLifecycles();
       renderOrders();
@@ -1277,6 +1390,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.broker = "all";
       state.focus = "all";
       state.executionStatus = "all";
+      state.requestId = "";
       state.executionId = "";
       state.orderId = "";
       renderAll();
@@ -1290,6 +1404,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.broker = next.broker;
       state.focus = next.focus;
       state.executionStatus = next.executionStatus;
+      state.requestId = next.requestId;
       state.executionId = next.executionId;
       state.orderId = next.orderId;
       renderAll();

@@ -101,6 +101,7 @@
 | W-048 | 稳定性 | 增加可配置自动重试与 protection mode 拦截动作 | 让 persist backtest 遇到瞬时失败可重试，遇到保护模式可直接 blocked 返回 | 已完成 |
 | W-049 | Dashboard | 把 blocked execution 接入历史页摘要与筛选 | 展示 blocked 计数，并支持按 blocked 状态筛选执行尝试 | 已完成 |
 | W-050 | 稳定性 | 为同一次回测触发增加 request_id 关联链路 | 把同一轮调用产生的多次 execution attempt 串成同一个请求上下文 | 已完成 |
+| W-051 | Dashboard | 增加 request 级执行链查询与历史页联动 | 支持 execution request 列表、request detail、request 级摘要卡片与页面联动 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -651,6 +652,18 @@
 | 为什么这么做 | 因为有了自动重试之后，单看 `attempt_number` 还不够，它只能说明“这是第几次尝试”，却不能说明“这些尝试本来是不是同一轮调用”。`request_id` 补的就是这层跨 attempt 的关联语义。 |
 | 未完成 | 基于 request_id 的历史页聚合、单次请求级摘要卡片、retry chain 可视化 |
 | 备注 | 这一步是在给“真正的运行控制器链路追踪”继续打底 |
+
+### 2026-03-28 第 34 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让 `request_id` 不只存在于字段层，而是变成可以直接用于复盘整条重试链的查询和页面能力 |
+| 输入 | 已有 `request_id` 字段与 execution attempt 记录，但还缺少 request 级聚合查询和历史页联动 |
+| 产出 | `execution-requests` / `execution-request-detail` CLI、request 级 repository 查询、历史页 `Execution Requests` / `Execution Request Detail` 面板、request 级摘要卡片 |
+| 结果 | 现在同一次 `persist_backtest_run` 调用产生的多次 execution attempt，不只是共享同一个 `request_id`，还可以作为一整条 retry chain 被列出、点开、联动查看 |
+| 为什么这么做 | 因为一旦系统开始自动重试，真正需要排查的对象就不再只是单个 execution，而是“这一整次外部请求最终经历了什么”。request 级视图补上的就是这层更接近真实运维的观察方式。 |
+| 未完成 | request 级失败原因聚合、按 request 粒度的异常优先排序、更强的 retry chain 可视化 |
+| 备注 | 这一步让 execution retry control flow 真正具备了“请求链级别”的可观测性 |
 
 ---
 

@@ -58,6 +58,54 @@ def _build_order_lifecycle_details(orders: list[dict[str, object]]) -> dict[str,
     return grouped
 
 
+def _build_execution_requests(executions: list[dict[str, object]]) -> list[dict[str, object]]:
+    """把多次 execution attempt 按 `request_id` 归并成请求级摘要。"""
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for execution in executions:
+        request_id = str(execution.get("request_id", ""))
+        if not request_id:
+            continue
+        grouped.setdefault(request_id, []).append(execution)
+
+    requests: list[dict[str, object]] = []
+    for request_id, attempts in grouped.items():
+        ordered = sorted(attempts, key=lambda item: str(item.get("started_at", "")))
+        first = ordered[0]
+        last = ordered[-1]
+        requests.append(
+            {
+                "request_id": request_id,
+                "symbol": last.get("symbol", ""),
+                "timeframe": last.get("timeframe", ""),
+                "attempt_count": len(ordered),
+                "attempt_path": " -> ".join(str(item.get("status", "")) for item in ordered),
+                "final_status": last.get("status", ""),
+                "latest_execution_id": last.get("execution_id", ""),
+                "run_id": last.get("run_id", ""),
+                "retried": len(ordered) > 1,
+                "blocked": last.get("status") == "blocked",
+                "protection_mode_seen": any(bool(item.get("protection_mode")) for item in ordered),
+                "requested_at": first.get("requested_at", ""),
+                "last_updated_at": last.get("finished_at") or last.get("started_at", ""),
+            }
+        )
+    requests.sort(key=lambda item: str(item.get("last_updated_at", "")), reverse=True)
+    return requests
+
+
+def _build_execution_request_details(executions: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+    """把 execution attempt 按 `request_id` 聚合成明细，供历史页联动展示。"""
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for execution in executions:
+        request_id = str(execution.get("request_id", ""))
+        if not request_id:
+            continue
+        grouped.setdefault(request_id, []).append(execution)
+    for attempts in grouped.values():
+        attempts.sort(key=lambda item: str(item.get("started_at", "")))
+    return grouped
+
+
 def build_dashboard_payload(backtest_result: dict[str, object]) -> dict[str, object]:
     """把单次回测结果整理成 dashboard 页面使用的数据格式。"""
     metrics = backtest_result["metrics"]
@@ -121,10 +169,14 @@ def build_history_payload(
     latest_run = runs[0] if runs else {}
     order_lifecycles = _build_order_lifecycles(orders)
     order_lifecycle_details = _build_order_lifecycle_details(orders)
+    execution_requests = _build_execution_requests(executions)
+    execution_request_details = _build_execution_request_details(executions)
     return {
         "history_summary": {
             "total_runs": len(runs),
             "total_executions": len(executions),
+            "total_execution_requests": len(execution_requests),
+            "retried_execution_requests": len([item for item in execution_requests if item.get("retried")]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),
             "running_executions": len([item for item in executions if item.get("status") == "running"]),
@@ -140,6 +192,8 @@ def build_history_payload(
             "repriced_lifecycles": len([item for item in order_lifecycles if "replaced" in str(item.get("status_path", ""))]),
         },
         "runs_table": runs,
+        "execution_requests": execution_requests,
+        "execution_request_details": execution_request_details,
         "recent_executions": executions,
         "order_lifecycles": order_lifecycles,
         "order_lifecycle_details": order_lifecycle_details,
