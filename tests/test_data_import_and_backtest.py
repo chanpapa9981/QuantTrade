@@ -248,7 +248,10 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("suppressed_duplicates", history_payload["history_summary"])
         self.assertIn("acknowledged_notifications", history_payload["history_summary"])
         self.assertIn("unacknowledged_notifications", history_payload["history_summary"])
+        self.assertIn("assigned_notifications", history_payload["history_summary"])
+        self.assertIn("unassigned_notifications", history_payload["history_summary"])
         self.assertIn("escalated_notifications", history_payload["history_summary"])
+        self.assertIn("escalated_unassigned_notifications", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
 
@@ -930,6 +933,104 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(result["escalated"], 0)
         self.assertEqual(recent_notifications["notifications"][0]["event_id"], created["event_id"])
         self.assertEqual(recent_notifications["notifications"][0]["escalated_at"], "")
+
+    def test_notification_assignment_marks_owner_and_note(self) -> None:
+        """验证通知可以被分派给明确负责人。"""
+        base_dir = Path("var/test-artifacts/notification-assignment")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-assignment.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_blocked",
+            title="Backtest blocked by protection mode",
+            message="assignment test",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        assigned = app.assign_notification(
+            event_id=created["event_id"],
+            owner="ops.alice",
+            note="follow up with broker mapping",
+        )
+        recent_notifications = app.recent_notification_events(limit=5)
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
+
+        self.assertIsNotNone(assigned["notification"])
+        self.assertEqual(assigned["notification"]["event_id"], created["event_id"])
+        self.assertEqual(assigned["notification"]["assigned_to"], "ops.alice")
+        self.assertTrue(assigned["notification"]["assigned_at"])
+        self.assertEqual(assigned["notification"]["assignment_note"], "follow up with broker mapping")
+        self.assertEqual(recent_notifications["notifications"][0]["assigned_to"], "ops.alice")
+        self.assertTrue(recent_notifications["notifications"][0]["assigned_at"])
+        self.assertEqual(recent_notifications["notifications"][0]["assignment_note"], "follow up with broker mapping")
+        self.assertEqual(history_payload["history_summary"]["assigned_notifications"], 1)
+        self.assertEqual(history_payload["history_summary"]["unassigned_notifications"], 0)
+
+    def test_notification_assignment_reduces_escalated_unowned_count(self) -> None:
+        """验证升级告警在分派后不再被统计成无人接手。"""
+        base_dir = Path("var/test-artifacts/notification-escalated-assigned")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-escalated-assigned.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+            notification_escalation_window_seconds=60,
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="critical",
+            category="execution_final_failure",
+            title="Backtest execution failed",
+            message="escalated assignment test",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        connection = connect_database(str(db_path))
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET timestamp = ?
+                WHERE event_id = ?
+                """,
+                ("2024-01-01T00:00:00+00:00", created["event_id"]),
+            )
+        finally:
+            connection.close()
+
+        app.escalate_notifications(limit=10)
+        before_assign = app.dashboard_history(runs_limit=5, events_limit=5)
+        app.assign_notification(event_id=created["event_id"], owner="ops.bob", note="take ownership after escalation")
+        after_assign = app.dashboard_history(runs_limit=5, events_limit=5)
+
+        self.assertEqual(before_assign["history_summary"]["escalated_unassigned_notifications"], 1)
+        self.assertEqual(after_assign["history_summary"]["escalated_notifications"], 1)
+        self.assertEqual(after_assign["history_summary"]["escalated_unassigned_notifications"], 0)
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

@@ -558,6 +558,9 @@ class BacktestRunRepository:
         run_id: str = "",
         execution_id: str = "",
         request_id: str = "",
+        assigned_to: str = "",
+        assigned_at: str = "",
+        assignment_note: str = "",
     ) -> str:
         """保存一条通知事件。
 
@@ -580,8 +583,9 @@ class BacktestRunRepository:
                     notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                     acknowledged_at, acknowledged_note,
                     escalated_at, escalation_level, escalation_reason,
-                    symbol, timeframe, run_id, execution_id, request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    symbol, timeframe, run_id, execution_id, request_id,
+                    assigned_to, assigned_at, assignment_note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -611,6 +615,9 @@ class BacktestRunRepository:
                     run_id[:80],
                     execution_id[:80],
                     request_id[:80],
+                    assigned_to[:120],
+                    assigned_at[:40],
+                    assignment_note[:500],
                 ),
             )
             return event_id
@@ -631,7 +638,8 @@ class BacktestRunRepository:
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                        acknowledged_at, acknowledged_note,
                        escalated_at, escalation_level, escalation_reason,
-                       symbol, timeframe, run_id, execution_id, request_id
+                       symbol, timeframe, run_id, execution_id, request_id,
+                       assigned_to, assigned_at, assignment_note
                 FROM notification_events
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -669,6 +677,9 @@ class BacktestRunRepository:
                 "run_id": row[24],
                 "execution_id": row[25],
                 "request_id": row[26],
+                "assigned_to": row[27],
+                "assigned_at": row[28],
+                "assignment_note": row[29],
             }
             for row in rows
         ]
@@ -693,7 +704,8 @@ class BacktestRunRepository:
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                        acknowledged_at, acknowledged_note,
                        escalated_at, escalation_level, escalation_reason,
-                       symbol, timeframe, run_id, execution_id, request_id
+                       symbol, timeframe, run_id, execution_id, request_id,
+                       assigned_to, assigned_at, assignment_note
                 FROM notification_events
                 WHERE notification_key = ?
                   AND silenced_until >= ?
@@ -734,6 +746,9 @@ class BacktestRunRepository:
             "run_id": row[24],
             "execution_id": row[25],
             "request_id": row[26],
+            "assigned_to": row[27],
+            "assigned_at": row[28],
+            "assignment_note": row[29],
         }
 
     def mark_notification_duplicate_suppressed(
@@ -786,7 +801,8 @@ class BacktestRunRepository:
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                        acknowledged_at, acknowledged_note,
                        escalated_at, escalation_level, escalation_reason,
-                       symbol, timeframe, run_id, execution_id, request_id
+                       symbol, timeframe, run_id, execution_id, request_id,
+                       assigned_to, assigned_at, assignment_note
                 FROM notification_events
                 WHERE delivery_status IN ('queued', 'delivery_failed_retryable')
                   AND delivery_attempts < ?
@@ -827,6 +843,9 @@ class BacktestRunRepository:
                 "run_id": row[24],
                 "execution_id": row[25],
                 "request_id": row[26],
+                "assigned_to": row[27],
+                "assigned_at": row[28],
+                "assignment_note": row[29],
             }
             for row in rows
         ]
@@ -867,6 +886,28 @@ class BacktestRunRepository:
                     datetime.now(UTC).isoformat(),
                     escalation_level[:40],
                     escalation_reason[:500],
+                    event_id[:80],
+                ),
+            )
+        finally:
+            connection.close()
+
+    def assign_notification_event(self, event_id: str, owner: str, note: str = "") -> None:
+        """给通知显式指定负责人。"""
+        connection = connect_database(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET assigned_to = ?,
+                    assigned_at = ?,
+                    assignment_note = ?
+                WHERE event_id = ?
+                """,
+                (
+                    owner[:120],
+                    datetime.now(UTC).isoformat(),
+                    note[:500],
                     event_id[:80],
                 ),
             )
@@ -1685,7 +1726,8 @@ class BacktestRunRepository:
                            notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
                            acknowledged_at, acknowledged_note,
                            escalated_at, escalation_level, escalation_reason,
-                           symbol, timeframe, run_id, execution_id, request_id
+                           symbol, timeframe, run_id, execution_id, request_id,
+                           assigned_to, assigned_at, assignment_note
                     FROM notification_events
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -1721,6 +1763,9 @@ class BacktestRunRepository:
                         "run_id": row[24],
                         "execution_id": row[25],
                         "request_id": row[26],
+                        "assigned_to": row[27],
+                        "assigned_at": row[28],
+                        "assignment_note": row[29],
                     }
                     for row in notification_rows
                 ]

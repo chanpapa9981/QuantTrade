@@ -100,7 +100,10 @@ def create_schema(db_path: str) -> None:
                 timeframe TEXT NOT NULL DEFAULT '',
                 run_id TEXT NOT NULL DEFAULT '',
                 execution_id TEXT NOT NULL DEFAULT '',
-                request_id TEXT NOT NULL DEFAULT ''
+                request_id TEXT NOT NULL DEFAULT '',
+                assigned_to TEXT NOT NULL DEFAULT '',
+                assigned_at TEXT NOT NULL DEFAULT '',
+                assignment_note TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS account_snapshots (
@@ -165,6 +168,9 @@ def create_schema(db_path: str) -> None:
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS run_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS execution_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS request_id TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS assigned_at TEXT DEFAULT '';")
+        connection.execute("ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS assignment_note TEXT DEFAULT '';")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS request_id TEXT DEFAULT '';")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS attempt_number INTEGER DEFAULT 1;")
         connection.execute("ALTER TABLE backtest_executions ADD COLUMN IF NOT EXISTS recovered_execution_count INTEGER DEFAULT 0;")

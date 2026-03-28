@@ -112,6 +112,7 @@
 | W-059 | 通知 / Dashboard / CLI | 增加告警静默窗口与汇总视图 | 支持重复告警压缩、`notification-summary`、history `Notification Summary` 和 suppressed duplicate 统计 | 已完成 |
 | W-060 | 通知 / Dashboard / CLI | 增加通知确认（ack）能力 | 支持 `notification-ack`、ack 时间/备注持久化、history 已确认/未确认统计与展示 | 已完成 |
 | W-061 | 通知 / Dashboard / CLI | 增加未确认告警升级标记 | 支持 `notification-escalate`、escalated_at/level/reason、history 升级统计与展示 | 已完成 |
+| W-062 | 通知 / Dashboard / CLI | 增加告警责任分派工作流 | 支持 `notification-assign`、assigned_to/assigned_at/assignment_note、history owner 过滤与责任统计 | 已完成 |
 | W-018 | 券商接入 | 集成 Schwab OAuth2 | 完成认证与续期 | 未开始 |
 | W-019 | 券商接入 | 实盘状态同步 | 读取账户、仓位、订单 | 未开始 |
 | W-020 | 通知 | 集成 Telegram/微信 | 推送交易与风控消息 | 未开始 |
@@ -796,6 +797,18 @@
 | 为什么这么做 | 因为很多真正危险的问题，不是“告警没发出来”，而是“告警发出来了，但没人处理，也没人知道它已经拖了多久”。把未确认超时的告警提升成明确的升级状态，值班视角才真正开始有优先级和时效语义。 |
 | 未完成 | 真正的分派/升级路线、升级通知二次发送、按人/班次 SLA、批量 ack/批量 escalate、外部协作系统联动 |
 | 备注 | 这一轮把通知层从“可确认”推进成了“可升级”的更完整值班闭环 |
+
+### 2026-03-28 第 45 轮
+
+| 项目 | 内容 |
+| :--- | :--- |
+| 目标 | 让告警不只是“有人看过”，还要明确“现在是谁负责继续跟进” |
+| 输入 | 已有通知 ack 和 escalation，但页面里仍缺少责任归属语义，导致高优先级告警即使升级了，也很难快速看出有没有人接手 |
+| 产出 | `notification-assign` CLI；`assigned_to` / `assigned_at` / `assignment_note` 字段；通知分派仓储与应用方法；history 页 Owner 过滤、Assigned/Unassigned/Escalated Unowned 摘要卡片，以及通知表 Owner/Assigned At/Assign Note 展示；对应测试 |
+| 结果 | 现在通知事件除了能被确认、升级，还能被明确分派给某个负责人；历史页可以直接看哪些告警已经有人接手，哪些升级告警仍然无人负责 |
+| 为什么这么做 | 因为值班闭环里真正容易掉链子的，不是“页面上没有状态”，而是“页面上有很多状态，却没人知道自己到底该接哪一条”。把 assignment 语义补进去后，系统才开始真正回答“这件事归谁”，而不是只停留在“这件事发生过、有人看过没有”。 |
+| 未完成 | 分派撤销、按班次/角色自动分派、批量分派、SLA 超时再升级、外部协作系统同步 |
+| 备注 | 这一轮把通知层从“可升级”推进成了“可归属、可协作”的更完整值班骨架 |
 
 ---
 

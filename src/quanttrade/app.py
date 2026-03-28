@@ -662,6 +662,16 @@ class QuantTradeApp:
         matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
         return {"notification": matched}
 
+    def assign_notification(self, event_id: str, owner: str, note: str = "") -> dict[str, object]:
+        """给某条通知指定后续负责人。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            repository.assign_notification_event(event_id=event_id, owner=owner, note=note)
+            refreshed = repository.fetch_recent_notification_events(limit=200)
+        matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
+        return {"notification": matched}
+
     def escalate_notifications(self, limit: int = 50) -> dict[str, object]:
         """把长时间未确认的高优先级通知标记成已升级。"""
         escalation_window_seconds = max(int(self.settings.notification.escalation_window_seconds), 0)

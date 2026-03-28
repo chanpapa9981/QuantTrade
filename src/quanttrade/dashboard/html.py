@@ -1059,6 +1059,12 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
               <option value="filtered">filtered</option>
               <option value="suppressed">suppressed</option>
             </select>
+            <label for="notification-owner-filter">Owner</label>
+            <select id="notification-owner-filter">
+              <option value="all">All owners</option>
+              <option value="assigned">Assigned</option>
+              <option value="unassigned">Unassigned</option>
+            </select>
             <div class="toolbar-actions">
               <button id="clear-context" class="ghost-button" type="button">Clear Context</button>
               <button id="copy-link" class="ghost-button" type="button">Copy Link</button>
@@ -1196,9 +1202,12 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Suppressed</th>
                   <th>Next Try</th>
                   <th>Silenced Until</th>
+                  <th>Owner</th>
+                  <th>Assigned At</th>
                   <th>Acked At</th>
                   <th>Escalated At</th>
                   <th>Provider</th>
+                  <th>Assign Note</th>
                   <th>Ack Note</th>
                   <th>Escalation</th>
                   <th>Last Error</th>
@@ -1274,6 +1283,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       const focus = params.get("focus") || "all";
       const executionStatus = params.get("execution_status") || "all";
       const notificationStatus = params.get("notification_status") || "all";
+      const notificationOwner = params.get("notification_owner") || "all";
       const requestId = params.get("request") || "";
       const executionId = params.get("execution") || "";
       const orderId = params.get("order") || "";
@@ -1285,6 +1295,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         focus: ["all", "anomalies"].includes(focus) ? focus : "all",
         executionStatus: ["all", "completed", "failed", "blocked", "abandoned", "running", "protection"].includes(executionStatus) ? executionStatus : "all",
         notificationStatus: ["all", "queued", "dispatched", "delivery_failed_retryable", "delivery_failed_final", "filtered", "suppressed"].includes(notificationStatus) ? notificationStatus : "all",
+        notificationOwner: ["all", "assigned", "unassigned"].includes(notificationOwner) ? notificationOwner : "all",
         requestId,
         executionId,
         orderId,
@@ -1301,6 +1312,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       if (state.focus !== "all") params.set("focus", state.focus);
       if (state.executionStatus !== "all") params.set("execution_status", state.executionStatus);
       if (state.notificationStatus !== "all") params.set("notification_status", state.notificationStatus);
+      if (state.notificationOwner !== "all") params.set("notification_owner", state.notificationOwner);
       if (state.requestId) params.set("request", state.requestId);
       if (state.executionId) params.set("execution", state.executionId);
       if (state.orderId) params.set("order", state.orderId);
@@ -1319,6 +1331,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("focus-filter").value = state.focus;
       document.getElementById("execution-status-filter").value = state.executionStatus;
       document.getElementById("notification-status-filter").value = state.notificationStatus;
+      document.getElementById("notification-owner-filter").value = state.notificationOwner;
     }}
     function filteredLifecycleCount() {{
       return filteredLifecycles().filter(order => state.focus === "all" || isAnomaly(order)).length;
@@ -1360,7 +1373,10 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Suppressed Dups", value: summary.suppressed_duplicates }},
         {{ label: "Acked Alerts", value: summary.acknowledged_notifications }},
         {{ label: "Unacked Alerts", value: summary.unacknowledged_notifications }},
+        {{ label: "Assigned Alerts", value: summary.assigned_notifications }},
+        {{ label: "Unassigned Alerts", value: summary.unassigned_notifications }},
         {{ label: "Escalated Alerts", value: summary.escalated_notifications }},
+        {{ label: "Escalated Unowned", value: summary.escalated_unassigned_notifications }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
@@ -1688,6 +1704,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           if (state.requestId && event.request_id && event.request_id !== state.requestId) return false;
           if (state.executionId && event.execution_id && event.execution_id !== state.executionId) return false;
           if (state.notificationStatus !== "all" && event.delivery_status !== state.notificationStatus) return false;
+          if (state.notificationOwner === "assigned" && !event.assigned_to) return false;
+          if (state.notificationOwner === "unassigned" && event.assigned_to) return false;
           return (
             event.category === row.category &&
             event.severity === row.severity &&
@@ -1713,6 +1731,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         if (state.requestId && event.request_id && event.request_id !== state.requestId) return false;
         if (state.executionId && event.execution_id && event.execution_id !== state.executionId) return false;
         if (state.notificationStatus !== "all" && event.delivery_status !== state.notificationStatus) return false;
+        if (state.notificationOwner === "assigned" && !event.assigned_to) return false;
+        if (state.notificationOwner === "unassigned" && event.assigned_to) return false;
         return true;
       }});
       document.getElementById("notifications-table").innerHTML = rows.length ? rows.map(event => `
@@ -1726,15 +1746,18 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(event.suppressed_duplicate_count ?? 0)}}</td>
           <td>${{event.next_delivery_attempt_at || ""}}</td>
           <td>${{event.silenced_until || ""}}</td>
+          <td>${{event.assigned_to || ""}}</td>
+          <td>${{event.assigned_at || ""}}</td>
           <td>${{event.acknowledged_at || ""}}</td>
           <td>${{event.escalated_at || ""}}</td>
           <td>${{event.provider}}</td>
+          <td>${{event.assignment_note || ""}}</td>
           <td>${{event.acknowledged_note || ""}}</td>
           <td>${{event.escalation_level || event.escalation_reason || ""}}</td>
           <td>${{event.last_error || ""}}</td>
           <td>${{event.execution_id || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="16" class="muted">No notification events in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="19" class="muted">No notification events in the current view.</td></tr>';
     }}
     async function copyCurrentLink() {{
       // 优先用浏览器剪贴板 API；如果环境不支持，就退化成 prompt。
@@ -1795,6 +1818,10 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.notificationStatus = event.target.value || "all";
       renderAll();
     }});
+    document.getElementById("notification-owner-filter").addEventListener("change", event => {{
+      state.notificationOwner = event.target.value || "all";
+      renderAll();
+    }});
     document.getElementById("execution-status-filter").addEventListener("change", event => {{
       state.executionStatus = event.target.value || "all";
       renderAll();
@@ -1806,6 +1833,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       state.broker = "all";
       state.focus = "all";
       state.notificationStatus = "all";
+      state.notificationOwner = "all";
       state.executionStatus = "all";
       state.requestId = "";
       state.executionId = "";
