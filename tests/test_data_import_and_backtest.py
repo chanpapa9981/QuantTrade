@@ -24,6 +24,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         open_order_timeout_bars: int = 2,
         max_retry_attempts: int = 2,
         retry_backoff_seconds: float = 0.0,
+        retry_backoff_strategy: str = "linear",
+        retry_backoff_multiplier: float = 2.0,
+        max_retry_backoff_seconds: float = 30.0,
         protection_mode_failure_threshold: int = 2,
         skip_run_on_protection_mode: bool = True,
     ) -> None:
@@ -46,6 +49,9 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     f"  open_order_timeout_bars: {open_order_timeout_bars}",
                     f"  max_retry_attempts: {max_retry_attempts}",
                     f"  retry_backoff_seconds: {retry_backoff_seconds}",
+                    f"  retry_backoff_strategy: {retry_backoff_strategy}",
+                    f"  retry_backoff_multiplier: {retry_backoff_multiplier}",
+                    f"  max_retry_backoff_seconds: {max_retry_backoff_seconds}",
                     f"  protection_mode_failure_threshold: {protection_mode_failure_threshold}",
                     f"  skip_run_on_protection_mode: {'true' if skip_run_on_protection_mode else 'false'}",
                 ]
@@ -150,9 +156,13 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(recent_executions["executions"]), 1)
         self.assertEqual(recent_request_chains["requests"][0]["request_id"], persist_result["request_id"])
         self.assertFalse(recent_request_chains["requests"][0]["retried"])
+        self.assertEqual(recent_request_chains["requests"][0]["health_label"], "healthy")
+        self.assertEqual(recent_request_chains["requests"][0]["anomaly_score"], 0)
         self.assertIsNotNone(request_detail["detail"])
         self.assertEqual(request_detail["detail"]["request"]["request_id"], persist_result["request_id"])
         self.assertEqual(request_detail["detail"]["request"]["attempt_count"], 1)
+        self.assertEqual(request_detail["detail"]["request"]["health_label"], "healthy")
+        self.assertEqual(request_detail["detail"]["request"]["failure_classes"], [])
         self.assertEqual(request_detail["detail"]["attempts"][0]["execution_id"], persist_result["execution_id"])
         self.assertEqual(recent_executions["executions"][0]["status"], "completed")
         self.assertIsNotNone(execution_detail["detail"])
@@ -183,8 +193,12 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("total_executions", history_payload["history_summary"])
         self.assertIn("total_execution_requests", history_payload["history_summary"])
         self.assertIn("retried_execution_requests", history_payload["history_summary"])
+        self.assertIn("anomalous_execution_requests", history_payload["history_summary"])
+        self.assertIn("critical_execution_requests", history_payload["history_summary"])
         self.assertIn("retry_scheduled_executions", history_payload["history_summary"])
         self.assertIn("protection_mode_executions", history_payload["history_summary"])
+        self.assertIn("top_request_failure_class", history_payload["history_summary"])
+        self.assertIn("request_anomalies", history_payload)
 
     def test_persist_backtest_run_recovers_stale_execution(self) -> None:
         """验证中断后残留的 running execution 能被自动恢复标记。"""
@@ -311,7 +325,15 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                     }
                 )
 
-        self._write_config(config_path, db_path, max_retry_attempts=2)
+        self._write_config(
+            config_path,
+            db_path,
+            max_retry_attempts=2,
+            retry_backoff_seconds=1.5,
+            retry_backoff_strategy="exponential",
+            retry_backoff_multiplier=3.0,
+            max_retry_backoff_seconds=10.0,
+        )
         app = QuantTradeApp(str(config_path))
         app.import_csv(str(csv_path), symbol="AAPL", timeframe="1d")
 
@@ -327,7 +349,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
 
         original_engine_run_series = BacktestEngine.run_series
         with patch("quanttrade.app.BacktestEngine.run_series", new=flaky_run_series):
-            persist_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
+            with patch("quanttrade.app.time.sleep") as mocked_sleep:
+                persist_result = app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
 
         recent_executions = app.recent_backtest_executions(limit=5)
         recent_request_chains = app.recent_execution_requests(limit=5)
@@ -338,9 +361,19 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(persist_result["attempts_used"], 2)
         self.assertEqual(persist_result["retry_count"], 1)
         self.assertEqual(call_count["value"], 2)
+        mocked_sleep.assert_called_once_with(1.5)
         self.assertTrue(recent_request_chains["requests"][0]["retried"])
         self.assertEqual(recent_request_chains["requests"][0]["attempt_count"], 2)
+        self.assertEqual(recent_request_chains["requests"][0]["health_label"], "watch")
+        self.assertEqual(recent_request_chains["requests"][0]["retry_scheduled_count"], 1)
+        self.assertEqual(recent_request_chains["requests"][0]["dominant_failure_class"], "RetryableExecutionError")
+        self.assertGreater(recent_request_chains["requests"][0]["anomaly_score"], 0)
         self.assertEqual(request_detail["detail"]["request"]["attempt_count"], 2)
+        self.assertEqual(request_detail["detail"]["request"]["health_label"], "watch")
+        self.assertEqual(
+            request_detail["detail"]["request"]["failure_classes"][0]["failure_class"],
+            "RetryableExecutionError",
+        )
         self.assertEqual(len(request_detail["detail"]["attempts"]), 2)
         self.assertEqual(recent_executions["executions"][0]["status"], "completed")
         self.assertEqual(recent_executions["executions"][0]["attempt_number"], 2)
@@ -402,12 +435,19 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
                 app.persist_backtest_run(symbol="AAPL", timeframe="1d", initial_equity=100_000.0)
 
         recent_executions = app.recent_backtest_executions(limit=5)
+        recent_request_chains = app.recent_execution_requests(limit=5)
+        request_detail = app.execution_request_detail(request_id=recent_executions["executions"][0]["request_id"])
 
         self.assertEqual(call_count["value"], 1)
         self.assertEqual(recent_executions["executions"][0]["status"], "failed")
         self.assertFalse(recent_executions["executions"][0]["retryable"])
         self.assertEqual(recent_executions["executions"][0]["retry_decision"], "final_failure")
         self.assertEqual(recent_executions["executions"][0]["failure_class"], "NonRetryableExecutionError")
+        self.assertEqual(recent_request_chains["requests"][0]["health_label"], "critical")
+        self.assertEqual(recent_request_chains["requests"][0]["final_failure_count"], 1)
+        self.assertEqual(recent_request_chains["requests"][0]["non_retryable_failure_count"], 1)
+        self.assertEqual(recent_request_chains["requests"][0]["dominant_failure_class"], "NonRetryableExecutionError")
+        self.assertEqual(request_detail["detail"]["request"]["health_label"], "critical")
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""
@@ -461,11 +501,35 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertEqual(blocked_result["execution"]["retry_decision"], "blocked_protection_mode")
         self.assertEqual(recent_request_chains["requests"][0]["final_status"], "blocked")
         self.assertTrue(recent_request_chains["requests"][0]["blocked"])
+        self.assertEqual(recent_request_chains["requests"][0]["health_label"], "critical")
+        self.assertEqual(recent_request_chains["requests"][0]["dominant_failure_class"], "ProtectionMode")
         self.assertTrue(request_detail["detail"]["request"]["blocked"])
+        self.assertEqual(request_detail["detail"]["request"]["health_label"], "critical")
         self.assertEqual(recent_executions["executions"][0]["request_id"], blocked_result["request_id"])
         self.assertEqual(recent_executions["executions"][0]["status"], "blocked")
         self.assertTrue(recent_executions["executions"][0]["protection_mode"])
         self.assertEqual(recent_executions["executions"][0]["failure_class"], "ProtectionMode")
+
+    def test_retry_backoff_uses_exponential_strategy_and_cap(self) -> None:
+        """验证退避计算支持指数增长，并会被最大等待时间封顶。"""
+        base_dir = Path("var/test-artifacts/retry-backoff")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "retry-backoff.duckdb"
+        config_path = base_dir / "settings.yaml"
+
+        self._write_config(
+            config_path,
+            db_path,
+            retry_backoff_seconds=1.5,
+            retry_backoff_strategy="exponential",
+            retry_backoff_multiplier=3.0,
+            max_retry_backoff_seconds=10.0,
+        )
+        app = QuantTradeApp(str(config_path))
+
+        self.assertEqual(app._compute_retry_backoff_seconds(1), 1.5)
+        self.assertEqual(app._compute_retry_backoff_seconds(2), 4.5)
+        self.assertEqual(app._compute_retry_backoff_seconds(3), 10.0)
 
     def test_persist_backtest_run_rejects_duplicate_execution_lock(self) -> None:
         """验证同标的同周期重复执行时，会被运行锁直接拦住。"""

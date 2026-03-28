@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 
 def _format_config_sections(
     settings: dict[str, dict[str, object]],
@@ -137,6 +139,43 @@ def _build_execution_requests(executions: list[dict[str, object]]) -> list[dict[
         ordered = sorted(attempts, key=lambda item: str(item.get("started_at", "")))
         first = ordered[0]
         last = ordered[-1]
+        failure_counter = Counter(
+            str(item.get("failure_class", "")).strip()
+            for item in ordered
+            if str(item.get("failure_class", "")).strip()
+        )
+        failure_classes = [
+            {"failure_class": failure_class, "count": count}
+            for failure_class, count in sorted(failure_counter.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        retry_scheduled_count = len([item for item in ordered if item.get("retry_decision") == "retry_scheduled"])
+        final_failure_count = len([item for item in ordered if item.get("retry_decision") == "final_failure"])
+        non_retryable_failure_count = len(
+            [
+                item
+                for item in ordered
+                if item.get("status") == "failed" and not bool(item.get("retryable"))
+            ]
+        )
+        anomaly_score = retry_scheduled_count
+        anomaly_score += final_failure_count * 3
+        anomaly_score += non_retryable_failure_count * 2
+        anomaly_score += sum(int(item.get("recovered_execution_count", 0)) for item in ordered)
+        if last.get("status") == "blocked":
+            anomaly_score += 4
+        elif last.get("status") in {"failed", "abandoned"}:
+            anomaly_score += 2
+        if any(bool(item.get("protection_mode")) for item in ordered):
+            anomaly_score += 2
+        if len(ordered) > 1:
+            anomaly_score += 1
+        health_label = "healthy"
+        if last.get("status") in {"failed", "blocked"} or final_failure_count or non_retryable_failure_count:
+            health_label = "critical"
+        elif last.get("status") == "abandoned" or retry_scheduled_count or any(
+            bool(item.get("protection_mode")) for item in ordered
+        ):
+            health_label = "watch"
         requests.append(
             {
                 "request_id": request_id,
@@ -153,6 +192,13 @@ def _build_execution_requests(executions: list[dict[str, object]]) -> list[dict[
                 "protection_mode_seen": any(bool(item.get("protection_mode")) for item in ordered),
                 "requested_at": first.get("requested_at", ""),
                 "last_updated_at": last.get("finished_at") or last.get("started_at", ""),
+                "retry_scheduled_count": retry_scheduled_count,
+                "final_failure_count": final_failure_count,
+                "non_retryable_failure_count": non_retryable_failure_count,
+                "failure_classes": failure_classes,
+                "dominant_failure_class": failure_classes[0]["failure_class"] if failure_classes else "",
+                "anomaly_score": anomaly_score,
+                "health_label": health_label,
             }
         )
     requests.sort(key=lambda item: str(item.get("last_updated_at", "")), reverse=True)
@@ -279,18 +325,37 @@ def build_history_payload(
     order_lifecycle_details = _build_order_lifecycle_details(orders)
     execution_requests = _build_execution_requests(executions)
     execution_request_details = _build_execution_request_details(executions)
+    request_anomalies = sorted(
+        [item for item in execution_requests if item.get("anomaly_score", 0) > 0],
+        key=lambda item: (-int(item.get("anomaly_score", 0)), str(item.get("last_updated_at", ""))),
+    )
+    failure_class_counter: Counter[str] = Counter()
+    for request in execution_requests:
+        for failure in request.get("failure_classes", []):
+            failure_class = str(failure.get("failure_class", "")).strip()
+            if failure_class:
+                failure_class_counter[failure_class] += int(failure.get("count", 0))
     return {
         "history_summary": {
             "total_runs": len(runs),
             "total_executions": len(executions),
             "total_execution_requests": len(execution_requests),
             "retried_execution_requests": len([item for item in execution_requests if item.get("retried")]),
+            "anomalous_execution_requests": len(request_anomalies),
+            "critical_execution_requests": len(
+                [item for item in execution_requests if item.get("health_label") == "critical"]
+            ),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),
             "running_executions": len([item for item in executions if item.get("status") == "running"]),
             "protection_mode_executions": len([item for item in executions if item.get("protection_mode")]),
             "recovered_execution_starts": sum(int(item.get("recovered_execution_count", 0)) for item in executions),
+            "top_request_failure_class": (
+                max(failure_class_counter.items(), key=lambda item: (item[1], item[0]))[0]
+                if failure_class_counter
+                else ""
+            ),
             "latest_symbol": latest_run.get("symbol", ""),
             "latest_return_pct": latest_run.get("total_return_pct", 0.0),
             "latest_sharpe_ratio": latest_run.get("sharpe_ratio", 0.0),
@@ -303,6 +368,7 @@ def build_history_payload(
         "runs_table": runs,
         "execution_requests": execution_requests,
         "execution_request_details": execution_request_details,
+        "request_anomalies": request_anomalies[:8],
         "recent_executions": executions,
         "order_lifecycles": order_lifecycles,
         "order_lifecycle_details": order_lifecycle_details,

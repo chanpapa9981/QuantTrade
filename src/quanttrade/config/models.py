@@ -71,6 +71,9 @@ class ExecutionConfig:
     open_order_timeout_bars: int = 2
     max_retry_attempts: int = 2
     retry_backoff_seconds: float = 0.0
+    retry_backoff_strategy: str = "linear"
+    retry_backoff_multiplier: float = 2.0
+    max_retry_backoff_seconds: float = 30.0
     protection_mode_failure_threshold: int = 2
     skip_run_on_protection_mode: bool = True
 

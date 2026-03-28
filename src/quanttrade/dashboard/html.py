@@ -911,15 +911,38 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                 <tr>
                   <th>Request ID</th>
                   <th>Run ID</th>
+                  <th>Health</th>
+                  <th>Anomaly Score</th>
                   <th>Final</th>
                   <th>Attempts</th>
                   <th>Retried</th>
                   <th>Protected</th>
+                  <th>Failure Mix</th>
                   <th>Decision Path</th>
                   <th>Path</th>
                 </tr>
               </thead>
               <tbody id="request-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Request Anomalies</h2>
+          <div class="panel-note">Prioritized request chains that deserve investigation first</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Request ID</th>
+                  <th>Health</th>
+                  <th>Anomaly Score</th>
+                  <th>Final</th>
+                  <th>Retry Scheduled</th>
+                  <th>Top Failure</th>
+                </tr>
+              </thead>
+              <tbody id="request-anomaly-table"></tbody>
             </table>
           </div>
         </section>
@@ -1150,6 +1173,11 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
     function fmt(value) {{
       return typeof value === "number" ? value.toLocaleString(undefined, {{ maximumFractionDigits: 4 }}) : value;
     }}
+    function formatFailureMix(request) {{
+      const failures = request.failure_classes || [];
+      if (!failures.length) return "";
+      return failures.map(item => `${{item.failure_class}}(${{item.count}})`).join(", ");
+    }}
     function lifecycleCountForRun(runId) {{
       return payload.order_lifecycles.filter(order => order.run_id === runId).length;
     }}
@@ -1249,12 +1277,15 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Total Runs", value: summary.total_runs }},
         {{ label: "Request Chains", value: summary.total_execution_requests }},
         {{ label: "Retried Requests", value: summary.retried_execution_requests }},
+        {{ label: "Anomalous Requests", value: summary.anomalous_execution_requests }},
+        {{ label: "Critical Requests", value: summary.critical_execution_requests }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
         {{ label: "Execution Blocked", value: summary.blocked_executions }},
         {{ label: "Protection Starts", value: summary.protection_mode_executions }},
         {{ label: "Recovered Starts", value: summary.recovered_execution_starts }},
+        {{ label: "Top Failure Class", value: summary.top_request_failure_class || "-" }},
         {{ label: "Latest Symbol", value: summary.latest_symbol }},
         {{ label: "Latest Return %", value: summary.latest_return_pct }},
         {{ label: "Latest Sharpe", value: summary.latest_sharpe_ratio }},
@@ -1310,10 +1341,13 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         <tr class="${{state.requestId === request.request_id ? "row-active" : ""}}">
           <td><button class="link-button" data-request-id="${{request.request_id}}">${{request.request_id}}</button></td>
           <td>${{request.run_id ? `<button class="link-button" data-request-run-id="${{request.run_id}}">${{request.run_id}}</button>` : ""}}</td>
+          <td>${{request.health_label}}</td>
+          <td>${{fmt(request.anomaly_score || 0)}}</td>
           <td>${{request.final_status}}</td>
           <td>${{fmt(request.attempt_count)}}</td>
           <td>${{request.retried ? "yes" : "no"}}</td>
           <td>${{request.protection_mode_seen ? "yes" : "no"}}</td>
+          <td>${{formatFailureMix(request)}}</td>
           <td>${{request.decision_path || ""}}</td>
           <td>${{request.attempt_path}}</td>
         </tr>
@@ -1330,7 +1364,30 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           renderAll();
         }});
       }});
+      renderRequestAnomalies(rows);
       renderRequestDetail();
+    }}
+    function renderRequestAnomalies(requestRows) {{
+      // 这个面板把“最值得先看”的 request 先排到前面，减少人工在表里翻找的时间。
+      const rows = (requestRows || [])
+        .filter(request => Number(request.anomaly_score || 0) > 0)
+        .sort((left, right) => Number(right.anomaly_score || 0) - Number(left.anomaly_score || 0));
+      document.getElementById("request-anomaly-table").innerHTML = rows.length ? rows.map(request => `
+        <tr class="${{state.requestId === request.request_id ? "row-active" : ""}}">
+          <td><button class="link-button" data-request-anomaly-id="${{request.request_id}}">${{request.request_id}}</button></td>
+          <td>${{request.health_label}}</td>
+          <td>${{fmt(request.anomaly_score || 0)}}</td>
+          <td>${{request.final_status}}</td>
+          <td>${{fmt(request.retry_scheduled_count || 0)}}</td>
+          <td>${{request.dominant_failure_class || ""}}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="6" class="muted">No anomalous request chains in the current view.</td></tr>';
+      document.querySelectorAll("[data-request-anomaly-id]").forEach(node => {{
+        node.addEventListener("click", () => {{
+          state.requestId = node.getAttribute("data-request-anomaly-id") || "";
+          renderAll();
+        }});
+      }});
     }}
     function renderRequestDetail() {{
       // request detail 先看整条重试链，再决定点进哪一次具体 execution。
@@ -1340,7 +1397,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         state.executionId = attempts[attempts.length - 1]?.execution_id ?? state.executionId;
       }}
       document.getElementById("request-detail-meta").textContent = request
-        ? `Request ${{request.request_id}} | Final: ${{request.final_status}} | Attempts: ${{request.attempt_count}} | Retried: ${{request.retried ? "yes" : "no"}} | Protected: ${{request.protection_mode_seen ? "yes" : "no"}}`
+        ? `Request ${{request.request_id}} | Health: ${{request.health_label}} | Anomaly Score: ${{request.anomaly_score || 0}} | Final: ${{request.final_status}} | Attempts: ${{request.attempt_count}} | Retried: ${{request.retried ? "yes" : "no"}} | Protected: ${{request.protection_mode_seen ? "yes" : "no"}} | Failure Mix: ${{formatFailureMix(request)}}`
         : "No request selected.";
       document.getElementById("request-detail-table").innerHTML = attempts.map(attempt => `
         <tr class="${{state.executionId === attempt.execution_id ? "row-active" : ""}}">

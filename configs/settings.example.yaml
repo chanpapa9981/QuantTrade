@@ -34,6 +34,9 @@ execution:
   open_order_timeout_bars: 2
   max_retry_attempts: 2
   retry_backoff_seconds: 0.0
+  retry_backoff_strategy: linear
+  retry_backoff_multiplier: 2.0
+  max_retry_backoff_seconds: 30.0
   protection_mode_failure_threshold: 2
   skip_run_on_protection_mode: true
 

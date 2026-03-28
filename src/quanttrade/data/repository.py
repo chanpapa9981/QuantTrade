@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -195,6 +196,106 @@ class BacktestRunRepository:
             "finished_at": row[16],
             "run_id": row[17],
             "error_message": row[18],
+        }
+
+    @staticmethod
+    def _failure_class_summary(attempts: list[dict[str, object]]) -> list[dict[str, object]]:
+        """统计一条 request 链里最常见的失败类别。
+
+        这里单独输出列表，而不是只给一个字符串，是为了让 CLI 和页面都能同时看到：
+        - 有没有多种失败混在同一条链里；
+        - 哪一类失败出现得最多；
+        - 后续如果要按类别排序或聚合，也能直接复用这份结构。
+        """
+        counter = Counter(
+            str(item.get("failure_class", "")).strip()
+            for item in attempts
+            if str(item.get("failure_class", "")).strip()
+        )
+        return [
+            {"failure_class": failure_class, "count": count}
+            for failure_class, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+        ]
+
+    @staticmethod
+    def _request_anomaly_score(attempts: list[dict[str, object]], latest: dict[str, object]) -> int:
+        """给 request 链算一个简单异常分数，便于先看最值得排查的请求。
+
+        分数不是风险模型，只是排错优先级：
+        - 最终失败 / 被拦截，比普通重试更严重；
+        - 明确不可重试的错误，比可重试瞬时错误更值得优先处理；
+        - 保护模式、恢复启动、重复重试都会把分数继续抬高。
+        """
+        retry_scheduled_count = len([item for item in attempts if item.get("retry_decision") == "retry_scheduled"])
+        final_failure_count = len([item for item in attempts if item.get("retry_decision") == "final_failure"])
+        non_retryable_failure_count = len(
+            [
+                item
+                for item in attempts
+                if item.get("status") == "failed" and not bool(item.get("retryable"))
+            ]
+        )
+        recovered_starts = sum(int(item.get("recovered_execution_count", 0)) for item in attempts)
+        score = retry_scheduled_count
+        score += final_failure_count * 3
+        score += non_retryable_failure_count * 2
+        score += recovered_starts
+        if latest.get("status") == "blocked":
+            score += 4
+        elif latest.get("status") in {"failed", "abandoned"}:
+            score += 2
+        if any(bool(item.get("protection_mode")) for item in attempts):
+            score += 2
+        if len(attempts) > 1:
+            score += 1
+        return score
+
+    def _summarize_execution_request(self, request_id: str, attempts: list[dict[str, object]]) -> dict[str, object]:
+        """把同一个 request 下的多次 execution attempt 压缩成一条摘要。"""
+        ordered = sorted(attempts, key=lambda item: str(item.get("started_at", "")))
+        latest = ordered[-1]
+        failure_classes = self._failure_class_summary(ordered)
+        retry_scheduled_count = len([item for item in ordered if item.get("retry_decision") == "retry_scheduled"])
+        final_failure_count = len([item for item in ordered if item.get("retry_decision") == "final_failure"])
+        non_retryable_failure_count = len(
+            [
+                item
+                for item in ordered
+                if item.get("status") == "failed" and not bool(item.get("retryable"))
+            ]
+        )
+        anomaly_score = self._request_anomaly_score(ordered, latest)
+        health_label = "healthy"
+        if latest.get("status") in {"failed", "blocked"} or final_failure_count or non_retryable_failure_count:
+            health_label = "critical"
+        elif latest.get("status") == "abandoned" or retry_scheduled_count or any(
+            bool(item.get("protection_mode")) for item in ordered
+        ):
+            health_label = "watch"
+        return {
+            "request_id": request_id,
+            "symbol": latest["symbol"],
+            "timeframe": latest["timeframe"],
+            "attempt_count": len(ordered),
+            "attempt_path": " -> ".join(str(item.get("status", "")) for item in ordered),
+            "decision_path": " -> ".join(
+                str(item.get("retry_decision", "")) for item in ordered if item.get("retry_decision")
+            ),
+            "final_status": latest["status"],
+            "latest_execution_id": latest["execution_id"],
+            "run_id": latest["run_id"],
+            "retried": len(ordered) > 1,
+            "blocked": latest["status"] == "blocked",
+            "protection_mode_seen": any(bool(item.get("protection_mode")) for item in ordered),
+            "requested_at": ordered[0]["requested_at"],
+            "last_updated_at": latest["finished_at"] or latest["started_at"],
+            "retry_scheduled_count": retry_scheduled_count,
+            "final_failure_count": final_failure_count,
+            "non_retryable_failure_count": non_retryable_failure_count,
+            "failure_classes": failure_classes,
+            "dominant_failure_class": failure_classes[0]["failure_class"] if failure_classes else "",
+            "anomaly_score": anomaly_score,
+            "health_label": health_label,
         }
 
     def create_execution(
@@ -616,22 +717,8 @@ class BacktestRunRepository:
             connection.close()
 
         attempts = [self._execution_row_to_dict(row) for row in rows]
-        latest = attempts[-1]
         return {
-            "request": {
-                "request_id": request_id,
-                "symbol": latest["symbol"],
-                "timeframe": latest["timeframe"],
-                "attempt_count": len(attempts),
-                "final_status": latest["status"],
-                "latest_execution_id": latest["execution_id"],
-                "run_id": latest["run_id"],
-                "retried": len(attempts) > 1,
-                "blocked": latest["status"] == "blocked",
-                "protection_mode_seen": any(item["protection_mode"] for item in attempts),
-                "requested_at": attempts[0]["requested_at"],
-                "last_updated_at": latest["finished_at"] or latest["started_at"],
-            },
+            "request": self._summarize_execution_request(request_id, attempts),
             "attempts": attempts,
         }
 
@@ -660,26 +747,7 @@ class BacktestRunRepository:
             request_id = str(execution["request_id"])
             grouped.setdefault(request_id, []).append(execution)
 
-        summaries: list[dict[str, object]] = []
-        for request_id, attempts in grouped.items():
-            ordered = sorted(attempts, key=lambda item: str(item.get("started_at", "")))
-            latest = ordered[-1]
-            summaries.append(
-                {
-                    "request_id": request_id,
-                    "symbol": latest["symbol"],
-                    "timeframe": latest["timeframe"],
-                    "attempt_count": len(ordered),
-                    "final_status": latest["status"],
-                    "latest_execution_id": latest["execution_id"],
-                    "run_id": latest["run_id"],
-                    "retried": len(ordered) > 1,
-                    "blocked": latest["status"] == "blocked",
-                    "protection_mode_seen": any(item["protection_mode"] for item in ordered),
-                    "requested_at": ordered[0]["requested_at"],
-                    "last_updated_at": latest["finished_at"] or latest["started_at"],
-                }
-            )
+        summaries = [self._summarize_execution_request(request_id, attempts) for request_id, attempts in grouped.items()]
         summaries.sort(key=lambda item: str(item.get("last_updated_at", "")), reverse=True)
         return summaries[:limit]
 

@@ -149,6 +149,34 @@ class QuantTradeApp:
             "log_reason": str(exc),
         }
 
+    def _compute_retry_backoff_seconds(self, attempt_number: int) -> float:
+        """根据配置计算本次重试前应该等待多久。
+
+        小白可以把这里理解成“控制器决定先停多久再撞下一次”：
+        1. `retry_backoff_seconds` 是基础等待时长；
+        2. `retry_backoff_strategy` 决定等待是线性增加，还是指数级增加；
+        3. `retry_backoff_multiplier` 只在指数退避时起作用；
+        4. `max_retry_backoff_seconds` 用来给等待时间封顶，避免越退越久。
+        """
+        base_delay = max(float(self.settings.execution.retry_backoff_seconds), 0.0)
+        if base_delay <= 0:
+            return 0.0
+
+        strategy = str(self.settings.execution.retry_backoff_strategy or "linear").strip().lower()
+        multiplier = max(float(self.settings.execution.retry_backoff_multiplier), 1.0)
+        capped_max = max(float(self.settings.execution.max_retry_backoff_seconds), 0.0)
+        normalized_attempt = max(int(attempt_number), 1)
+
+        if strategy == "exponential":
+            delay = base_delay * (multiplier ** max(normalized_attempt - 1, 0))
+        else:
+            # 任何未知策略都退回线性模式，保证控制流可预测，而不是因为拼写问题直接失效。
+            delay = base_delay * normalized_attempt
+
+        if capped_max > 0:
+            return min(delay, capped_max)
+        return delay
+
     def persist_backtest_run(
         self,
         symbol: str,
@@ -162,7 +190,7 @@ class QuantTradeApp:
         2. backtest_executions：记录这次运行是开始了、完成了、失败了还是中断恢复了。
         """
         max_retry_attempts = max(int(self.settings.execution.max_retry_attempts), 1)
-        retry_backoff_seconds = max(float(self.settings.execution.retry_backoff_seconds), 0.0)
+        retry_backoff_strategy = str(self.settings.execution.retry_backoff_strategy or "linear").strip().lower()
         protection_threshold = max(int(self.settings.execution.protection_mode_failure_threshold), 1)
         skip_run_on_protection_mode = bool(self.settings.execution.skip_run_on_protection_mode)
         request_id = str(uuid4())
@@ -268,18 +296,21 @@ class QuantTradeApp:
                             failure_class=str(error_meta["failure_class"]),
                         )
                     if retry_decision == "retry_scheduled":
+                        backoff_seconds = self._compute_retry_backoff_seconds(attempts_used)
                         LOGGER.warning(
-                            "retrying persisted backtest request_id=%s execution_id=%s after retryable failure class=%s attempt=%s/%s reason=%s",
+                            "retrying persisted backtest request_id=%s execution_id=%s after retryable failure class=%s attempt=%s/%s strategy=%s backoff_seconds=%.3f reason=%s",
                             request_id,
                             execution_id,
                             error_meta["failure_class"],
                             attempts_used,
                             max_retry_attempts,
+                            retry_backoff_strategy,
+                            backoff_seconds,
                             last_error,
                         )
-                        if retry_backoff_seconds > 0:
-                            # 简单线性退避：越往后重试，等待越久，避免连续立刻撞到同一类瞬时问题。
-                            time.sleep(retry_backoff_seconds * attempts_used)
+                        if backoff_seconds > 0:
+                            # 这里显式 sleep，不是为了模拟外部系统，而是为了把“退避策略”真正落实成控制动作。
+                            time.sleep(backoff_seconds)
                         continue
                     LOGGER.error(
                         "stopping persisted backtest request_id=%s execution_id=%s after non-retryable or final failure class=%s attempt=%s/%s reason=%s",
