@@ -691,117 +691,293 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
   <title>QuantTrade History</title>
   <style>
     :root {{
-      --bg: #0a0f1a;
-      --panel: #121a29;
-      --panel-alt: #172235;
-      --text: #edf3ff;
-      --muted: #93a9c7;
-      --accent: #62c0ff;
-      --accent-2: #95f2b2;
-      --warn: #ffbf69;
-      --line: rgba(255,255,255,0.08);
+      --bg: #eef3f7;
+      --bg-alt: #e3ebf1;
+      --panel: rgba(255, 255, 255, 0.88);
+      --panel-strong: rgba(255, 255, 255, 0.96);
+      --panel-alt: #f4f8fb;
+      --text: #11243a;
+      --muted: #60758c;
+      --accent: #1a6fd8;
+      --accent-soft: rgba(26, 111, 216, 0.10);
+      --accent-2: #177a52;
+      --warn: #b66a16;
+      --danger: #b73a3a;
+      --critical: #8b1e2d;
+      --line: rgba(17, 36, 58, 0.10);
+      --line-strong: rgba(17, 36, 58, 0.16);
+      --shadow: 0 24px 60px rgba(19, 42, 67, 0.10);
+      --shadow-soft: 0 14px 32px rgba(19, 42, 67, 0.06);
+      --mono: "IBM Plex Mono", "SFMono-Regular", monospace;
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
       font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
       background:
-        radial-gradient(circle at top right, rgba(98, 192, 255, 0.12), transparent 24%),
-        linear-gradient(180deg, #050b14 0%, var(--bg) 100%);
+        radial-gradient(circle at top left, rgba(26, 111, 216, 0.10), transparent 26%),
+        radial-gradient(circle at right 10%, rgba(23, 122, 82, 0.08), transparent 24%),
+        linear-gradient(180deg, #f8fbfd 0%, var(--bg) 58%, var(--bg-alt) 100%);
       color: var(--text);
     }}
     .shell {{
-      max-width: 1380px;
+      max-width: 1600px;
       margin: 0 auto;
-      padding: 40px 20px 56px;
+      padding: 28px 24px 72px;
     }}
     .hero {{
-      margin-bottom: 24px;
+      margin-bottom: 26px;
+    }}
+    .hero-shell {{
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.9fr);
+      gap: 20px;
+      padding: 28px;
+      border-radius: 28px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.96), rgba(244,248,251,0.96)),
+        var(--panel-strong);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }}
+    .hero-copy {{
+      min-width: 0;
     }}
     .eyebrow {{
       color: var(--accent);
       text-transform: uppercase;
-      letter-spacing: 0.18em;
+      letter-spacing: 0.16em;
       font-size: 12px;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
+      font-weight: 700;
     }}
     h1 {{
-      margin: 0 0 10px;
-      font-size: clamp(30px, 5vw, 54px);
-      line-height: 0.95;
+      margin: 0 0 12px;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 0.92;
+      letter-spacing: -0.04em;
     }}
     .subcopy {{
       color: var(--muted);
-      max-width: 760px;
-      line-height: 1.6;
+      max-width: 820px;
+      line-height: 1.68;
+      font-size: 15px;
     }}
-    .card-grid {{
+    .hero-status {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 14px;
-      margin-bottom: 20px;
+      align-content: start;
     }}
-    .card, .panel {{
+    .hero-card {{
+      padding: 18px 18px 16px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(26,111,216,0.08), rgba(26,111,216,0.03));
+      border: 1px solid rgba(26,111,216,0.12);
+      box-shadow: var(--shadow-soft);
+    }}
+    .hero-card-title {{
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }}
+    .hero-card-value {{
+      font-size: 30px;
+      font-weight: 750;
+      letter-spacing: -0.04em;
+      margin-bottom: 8px;
+    }}
+    .hero-card-note {{
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }}
+    .jump-nav {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }}
+    .jump-link {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.7);
+      border: 1px solid var(--line);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13px;
+      box-shadow: var(--shadow-soft);
+    }}
+    .summary-stack {{
+      display: grid;
+      gap: 18px;
+      margin-bottom: 24px;
+    }}
+    .summary-hero {{
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 14px;
+    }}
+    .summary-groups {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }}
+    .card, .panel, .summary-group {{
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 24px 50px rgba(0,0,0,0.22);
+      border-radius: 24px;
+      box-shadow: var(--shadow-soft);
     }}
     .card {{
-      padding: 18px;
+      padding: 18px 18px 16px;
+      position: relative;
+      overflow: hidden;
+      min-height: 132px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.92), rgba(244,248,251,0.92)),
+        var(--panel);
     }}
     .card-label {{
       color: var(--muted);
-      font-size: 13px;
+      font-size: 11px;
       margin-bottom: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
     }}
     .card-value {{
-      font-size: 30px;
+      font-size: 34px;
+      font-weight: 760;
+      letter-spacing: -0.05em;
+      margin-bottom: 8px;
+    }}
+    .card-note {{
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }}
+    .tone-ok {{
+      border-color: rgba(23, 122, 82, 0.18);
+      background: linear-gradient(180deg, rgba(23,122,82,0.08), rgba(255,255,255,0.92));
+    }}
+    .tone-warn {{
+      border-color: rgba(182, 106, 22, 0.18);
+      background: linear-gradient(180deg, rgba(255,191,105,0.12), rgba(255,255,255,0.92));
+    }}
+    .tone-critical {{
+      border-color: rgba(139, 30, 45, 0.18);
+      background: linear-gradient(180deg, rgba(183,58,58,0.10), rgba(255,255,255,0.92));
+    }}
+    .summary-group {{
+      padding: 18px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.94), rgba(244,248,251,0.94)),
+        var(--panel);
+    }}
+    .summary-group-head {{
+      margin-bottom: 14px;
+    }}
+    .summary-group-title {{
+      margin: 0 0 4px;
+      font-size: 16px;
+      font-weight: 730;
+      letter-spacing: -0.02em;
+    }}
+    .summary-group-note {{
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }}
+    .summary-group-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .summary-mini {{
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+    }}
+    .summary-mini-label {{
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
       font-weight: 700;
+    }}
+    .summary-mini-value {{
+      font-size: 20px;
+      font-weight: 720;
+      letter-spacing: -0.03em;
     }}
     .layout {{
       display: grid;
-      grid-template-columns: 1.3fr 1fr;
-      gap: 16px;
+      grid-template-columns: minmax(0, 1.28fr) minmax(360px, 0.92fr);
+      gap: 18px;
     }}
     .stack {{
       display: grid;
-      gap: 16px;
+      gap: 18px;
     }}
     .panel {{
-      padding: 18px;
+      padding: 20px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.95), rgba(244,248,251,0.95)),
+        var(--panel);
+      overflow: hidden;
     }}
     .panel-title {{
       margin: 0 0 4px;
-      font-size: 18px;
+      font-size: 19px;
+      font-weight: 730;
+      letter-spacing: -0.02em;
     }}
     .panel-note {{
       color: var(--muted);
       font-size: 13px;
-      margin-bottom: 14px;
+      margin-bottom: 16px;
+      line-height: 1.55;
     }}
     .toolbar {{
       display: flex;
-      gap: 10px;
+      gap: 12px;
       align-items: center;
       flex-wrap: wrap;
-      margin-bottom: 14px;
+      margin-bottom: 16px;
+      padding: 12px;
+      border-radius: 18px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
     }}
     .toolbar label {{
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
     }}
-    .toolbar select {{
+    .toolbar select,
+    .toolbar input,
+    .ghost-button {{
       background: var(--panel-alt);
       color: var(--text);
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      padding: 10px 12px;
+      min-height: 42px;
     }}
     .toolbar-actions {{
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
       flex-wrap: wrap;
       margin-left: auto;
     }}
@@ -813,75 +989,156 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       cursor: pointer;
       font: inherit;
       text-align: left;
+      font-weight: 650;
     }}
     .ghost-button {{
-      background: transparent;
-      color: var(--text);
-      border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 8px 12px;
       cursor: pointer;
-      font: inherit;
+      background: #fff;
+      box-shadow: var(--shadow-soft);
     }}
     .deep-link {{
       color: var(--accent);
       text-decoration: none;
       font-size: 13px;
+      font-weight: 700;
     }}
     .muted {{
       color: var(--muted);
       font-size: 13px;
     }}
     .context-line {{
-      margin-bottom: 12px;
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: var(--panel-alt);
+      border: 1px dashed var(--line-strong);
     }}
     .row-active {{
-      background: rgba(98, 192, 255, 0.10);
+      background: rgba(26, 111, 216, 0.08);
     }}
     .row-anomaly {{
-      box-shadow: inset 3px 0 0 rgba(255, 191, 105, 0.9);
+      box-shadow: inset 4px 0 0 rgba(182, 106, 22, 0.92);
     }}
     .table-wrap {{
       overflow-x: auto;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.65);
     }}
     table {{
       width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 13px;
     }}
     th, td {{
       text-align: left;
-      padding: 11px 10px;
+      padding: 12px 12px;
       border-bottom: 1px solid var(--line);
       white-space: nowrap;
+      vertical-align: top;
     }}
     th {{
       color: var(--muted);
-      font-weight: 600;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 11px;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f7fafc;
+    }}
+    tbody tr:nth-child(2n) {{
+      background: rgba(244, 248, 251, 0.62);
+    }}
+    tbody tr:hover {{
+      background: rgba(26, 111, 216, 0.06);
+    }}
+    td:first-child, th:first-child {{
+      padding-left: 14px;
+    }}
+    td:last-child, th:last-child {{
+      padding-right: 14px;
+    }}
+    td:first-child {{
+      font-family: var(--mono);
+      font-size: 12px;
     }}
     .buy {{ color: var(--accent-2); }}
     .sell {{ color: var(--warn); }}
     @media (max-width: 980px) {{
+      .hero-shell {{
+        grid-template-columns: 1fr;
+      }}
+      .summary-hero {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }}
+      .summary-groups {{
+        grid-template-columns: 1fr;
+      }}
+      .summary-group-grid {{
+        grid-template-columns: 1fr 1fr;
+      }}
       .layout {{ grid-template-columns: 1fr; }}
+    }}
+    @media (max-width: 700px) {{
+      .shell {{
+        padding: 18px 14px 42px;
+      }}
+      .hero-shell,
+      .panel,
+      .summary-group {{
+        padding: 16px;
+      }}
+      .summary-hero {{
+        grid-template-columns: 1fr;
+      }}
+      .summary-group-grid {{
+        grid-template-columns: 1fr;
+      }}
     }}
   </style>
 </head>
 <body>
   <main class="shell">
     <section class="hero">
-      <div class="eyebrow">QuantTrade History</div>
-      <h1>Run History Dashboard</h1>
-      <div class="subcopy">
-        A static history view generated from persisted backtest runs, order events, and audit events.
-        This page is intended for reviewing how the system has behaved across multiple runs without starting an app server.
+      <div class="hero-shell">
+        <div class="hero-copy">
+          <div class="eyebrow">QuantTrade History</div>
+          <h1>Run History Dashboard</h1>
+          <div class="subcopy">
+            A static operations workspace generated from persisted runs, requests, runner cycles, broker syncs,
+            and notifications. It is designed to feel like a lightweight control room instead of a raw export table.
+          </div>
+        </div>
+        <div class="hero-status">
+          <div class="hero-card">
+            <div class="hero-card-title">Workspace Mode</div>
+            <div class="hero-card-value">Static Ops Console</div>
+            <div class="hero-card-note">Use the grouped scorecards below to scan runtime health first, then drop into detailed panels only where something looks off.</div>
+          </div>
+          <div class="hero-card">
+            <div class="hero-card-title">Review Pattern</div>
+            <div class="hero-card-note">Start from runtime health, then check runner heartbeat, broker drift, and finally request or order detail. This keeps the page readable even as the dataset grows.</div>
+          </div>
+        </div>
       </div>
+      <nav class="jump-nav">
+        <a class="jump-link" href="#runs-panel">Runs</a>
+        <a class="jump-link" href="#runtime-panel">Runtime</a>
+        <a class="jump-link" href="#runner-panel">Runners</a>
+        <a class="jump-link" href="#broker-panel">Broker</a>
+        <a class="jump-link" href="#alerts-panel">Alerts</a>
+      </nav>
     </section>
 
-    <section id="summary-cards" class="card-grid"></section>
+    <section id="summary-cards" class="summary-stack"></section>
 
     <section class="layout">
       <div class="stack">
-        <section class="panel">
+        <section id="runs-panel" class="panel">
           <h2 class="panel-title">Recent Runs</h2>
           <div class="panel-note">Most recent persisted backtest runs</div>
           <div class="table-wrap">
@@ -902,7 +1159,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section id="runtime-panel" class="panel">
           <h2 class="panel-title">Execution Requests</h2>
           <div class="panel-note">Grouped retry chains keyed by request ID</div>
           <div class="table-wrap">
@@ -928,7 +1185,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section id="runner-panel" class="panel">
           <h2 class="panel-title">Request Anomalies</h2>
           <div class="panel-note">Prioritized request chains that deserve investigation first</div>
           <div class="table-wrap">
@@ -948,7 +1205,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section id="broker-panel" class="panel">
           <h2 class="panel-title">Recent Executions</h2>
           <div class="panel-note">Latest controller-level execution attempts, including retries and protection starts</div>
           <div class="toolbar">
@@ -985,7 +1242,7 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           </div>
         </section>
 
-        <section class="panel">
+        <section id="alerts-panel" class="panel">
           <h2 class="panel-title">Recent Live Cycles</h2>
           <div class="panel-note">Foreground polling cycles that decide whether the controller should run or skip</div>
           <div class="table-wrap">
@@ -1624,80 +1881,167 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
       document.getElementById("selected-context").textContent = bits.join(" | ");
     }}
     function renderCards() {{
-      // 顶部卡片先给总览，再决定是否深入看表格明细。
+      // 这里不再把所有指标无差别平铺，而是先给“主状态”，再给分组指标带。
       const summary = payload.history_summary;
-      const cards = [
-        {{ label: "Total Runs", value: summary.total_runs }},
-        {{ label: "Request Chains", value: summary.total_execution_requests }},
-        {{ label: "Retried Requests", value: summary.retried_execution_requests }},
-        {{ label: "Anomalous Requests", value: summary.anomalous_execution_requests }},
-        {{ label: "Critical Requests", value: summary.critical_execution_requests }},
-        {{ label: "Cooldown Active", value: summary.cooldown_protected_requests }},
-        {{ label: "Live Cycles", value: summary.total_live_cycles }},
-        {{ label: "Live Completed", value: summary.completed_live_cycles }},
-        {{ label: "Live Skipped", value: summary.skipped_live_cycles }},
-        {{ label: "Live Blocked", value: summary.blocked_live_cycles }},
-        {{ label: "Live Failed", value: summary.failed_live_cycles }},
-        {{ label: "Live Runners", value: summary.live_runners }},
-        {{ label: "Idle Runners", value: summary.idle_live_runners }},
-        {{ label: "Stalled Runners", value: summary.stalled_live_runners }},
-        {{ label: "Maintenance Cycles", value: summary.total_maintenance_cycles }},
-        {{ label: "Failed Maintenance", value: summary.failed_maintenance_cycles }},
-        {{ label: "Last Maintenance", value: summary.latest_maintenance_status || "-" }},
-        {{ label: "Maintenance Runners", value: summary.maintenance_runners }},
-        {{ label: "Stalled Maintenance Runners", value: summary.stalled_maintenance_runners }},
-        {{ label: "Broker Syncs", value: summary.total_broker_syncs }},
-        {{ label: "Broker Sync Failed", value: summary.failed_broker_syncs }},
-        {{ label: "Broker Stale", value: summary.stale_broker_syncs }},
-        {{ label: "Broker Drift", value: summary.broker_reconcile_mismatches }},
-        {{ label: "Broker Provider", value: summary.latest_broker_provider || "-" }},
-        {{ label: "Broker Equity", value: summary.latest_broker_equity }},
-        {{ label: "Broker Cash", value: summary.latest_broker_cash }},
-        {{ label: "Broker Positions", value: summary.latest_broker_positions }},
-        {{ label: "Broker Orders", value: summary.latest_broker_orders }},
-        {{ label: "Notifications", value: summary.total_notifications }},
-        {{ label: "Critical Alerts", value: summary.critical_notifications }},
-        {{ label: "Queued Alerts", value: summary.queued_notifications }},
-        {{ label: "Pending Alerts", value: summary.pending_notifications }},
-        {{ label: "Dispatched Alerts", value: summary.dispatched_notifications }},
-        {{ label: "Failed Alerts", value: summary.failed_notifications }},
-        {{ label: "Retrying Alerts", value: summary.scheduled_retry_notifications }},
-        {{ label: "Silenced Groups", value: summary.silenced_notification_groups }},
-        {{ label: "Suppressed Dups", value: summary.suppressed_duplicates }},
-        {{ label: "Acked Alerts", value: summary.acknowledged_notifications }},
-        {{ label: "Unacked Alerts", value: summary.unacknowledged_notifications }},
-        {{ label: "Active Alerts", value: summary.active_notifications }},
-        {{ label: "Resolved Alerts", value: summary.resolved_notifications }},
-        {{ label: "Reopened Alerts", value: summary.reopened_notifications }},
-        {{ label: "Assigned Alerts", value: summary.assigned_notifications }},
-        {{ label: "Unassigned Alerts", value: summary.unassigned_notifications }},
-        {{ label: "Escalated Alerts", value: summary.escalated_notifications }},
-        {{ label: "Escalated Unowned", value: summary.escalated_unassigned_notifications }},
-        {{ label: "SLA Breached", value: summary.sla_breached_notifications }},
-        {{ label: "Controller Issues", value: summary.controller_health_issues }},
-        {{ label: "Stale Executions", value: summary.stale_execution_candidates }},
-        {{ label: "Reconcile Queue", value: summary.runtime_reconcile_candidates }},
-        {{ label: "Execution Attempts", value: summary.total_executions }},
-        {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
-        {{ label: "Execution Failed", value: summary.failed_executions }},
-        {{ label: "Execution Blocked", value: summary.blocked_executions }},
-        {{ label: "Protection Starts", value: summary.protection_mode_executions }},
-        {{ label: "Recovered Starts", value: summary.recovered_execution_starts }},
-        {{ label: "Top Failure Class", value: summary.top_request_failure_class || "-" }},
-        {{ label: "Latest Symbol", value: summary.latest_symbol }},
-        {{ label: "Latest Return %", value: summary.latest_return_pct }},
-        {{ label: "Latest Sharpe", value: summary.latest_sharpe_ratio }},
-        {{ label: "Order Lifecycles", value: summary.total_lifecycles }},
-        {{ label: "Lifecycle Filled", value: summary.filled_lifecycles }},
-        {{ label: "Lifecycle Cancelled", value: summary.cancelled_lifecycles }},
-        {{ label: "Lifecycle Repriced", value: summary.repriced_lifecycles }},
+      function toneForValue(value) {{
+        const number = Number(value || 0);
+        if (number >= 3) return "tone-critical";
+        if (number > 0) return "tone-warn";
+        return "tone-ok";
+      }}
+      const primary = [
+        {{
+          label: "Controller Issues",
+          value: summary.controller_health_issues,
+          note: "The fastest read on whether this page is calm or needs intervention.",
+          tone: toneForValue(summary.controller_health_issues),
+        }},
+        {{
+          label: "Critical Alerts",
+          value: summary.critical_notifications,
+          note: "Any unhandled high-severity alert should pull attention before run analytics.",
+          tone: toneForValue(summary.critical_notifications),
+        }},
+        {{
+          label: "Broker Drift",
+          value: summary.broker_reconcile_mismatches,
+          note: "Threshold-breached mismatches between local state and broker snapshot.",
+          tone: toneForValue(summary.broker_reconcile_mismatches),
+        }},
+        {{
+          label: "Stalled Runners",
+          value: summary.stalled_live_runners,
+          note: "Live polling loops that may have silently stopped producing cycles.",
+          tone: toneForValue(summary.stalled_live_runners),
+        }},
+        {{
+          label: "Stalled Maintenance Runners",
+          value: summary.stalled_maintenance_runners,
+          note: "Maintenance loops that are no longer refreshing runtime health.",
+          tone: toneForValue(summary.stalled_maintenance_runners),
+        }},
+        {{
+          label: "Pending Alerts",
+          value: summary.pending_notifications,
+          note: "Queued or retrying notifications that still need delivery or attention.",
+          tone: toneForValue(summary.pending_notifications),
+        }},
       ];
-      document.getElementById("summary-cards").innerHTML = cards.map(card => `
-        <article class="card">
-          <div class="card-label">${{card.label}}</div>
-          <div class="card-value">${{fmt(card.value)}}</div>
-        </article>
-      `).join("");
+      const groups = [
+        {{
+          title: "Runtime Control",
+          note: "Retry chains, protection state, and execution pressure.",
+          metrics: [
+            {{ label: "Total Runs", value: summary.total_runs }},
+            {{ label: "Request Chains", value: summary.total_execution_requests }},
+            {{ label: "Retried Requests", value: summary.retried_execution_requests }},
+            {{ label: "Anomalous Requests", value: summary.anomalous_execution_requests }},
+            {{ label: "Critical Requests", value: summary.critical_execution_requests }},
+            {{ label: "Cooldown Active", value: summary.cooldown_protected_requests }},
+            {{ label: "Execution Attempts", value: summary.total_executions }},
+            {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
+            {{ label: "Execution Failed", value: summary.failed_executions }},
+            {{ label: "Execution Blocked", value: summary.blocked_executions }},
+            {{ label: "Protection Starts", value: summary.protection_mode_executions }},
+            {{ label: "Recovered Starts", value: summary.recovered_execution_starts }},
+            {{ label: "Stale Executions", value: summary.stale_execution_candidates }},
+            {{ label: "Reconcile Queue", value: summary.runtime_reconcile_candidates }},
+            {{ label: "Top Failure Class", value: summary.top_request_failure_class || "-" }},
+          ],
+        }},
+        {{
+          title: "Runner Cadence",
+          note: "Heartbeat view across live loops and maintenance loops.",
+          metrics: [
+            {{ label: "Live Cycles", value: summary.total_live_cycles }},
+            {{ label: "Live Completed", value: summary.completed_live_cycles }},
+            {{ label: "Live Skipped", value: summary.skipped_live_cycles }},
+            {{ label: "Live Blocked", value: summary.blocked_live_cycles }},
+            {{ label: "Live Failed", value: summary.failed_live_cycles }},
+            {{ label: "Live Runners", value: summary.live_runners }},
+            {{ label: "Idle Runners", value: summary.idle_live_runners }},
+            {{ label: "Stalled Runners", value: summary.stalled_live_runners }},
+            {{ label: "Maintenance Cycles", value: summary.total_maintenance_cycles }},
+            {{ label: "Failed Maintenance", value: summary.failed_maintenance_cycles }},
+            {{ label: "Last Maintenance", value: summary.latest_maintenance_status || "-" }},
+            {{ label: "Maintenance Runners", value: summary.maintenance_runners }},
+            {{ label: "Stalled Maintenance Runners", value: summary.stalled_maintenance_runners }},
+          ],
+        }},
+        {{
+          title: "Broker and Alerts",
+          note: "External state freshness plus the current alert queue.",
+          metrics: [
+            {{ label: "Broker Syncs", value: summary.total_broker_syncs }},
+            {{ label: "Broker Sync Failed", value: summary.failed_broker_syncs }},
+            {{ label: "Broker Stale", value: summary.stale_broker_syncs }},
+            {{ label: "Broker Provider", value: summary.latest_broker_provider || "-" }},
+            {{ label: "Broker Equity", value: summary.latest_broker_equity }},
+            {{ label: "Broker Cash", value: summary.latest_broker_cash }},
+            {{ label: "Broker Positions", value: summary.latest_broker_positions }},
+            {{ label: "Broker Orders", value: summary.latest_broker_orders }},
+            {{ label: "Notifications", value: summary.total_notifications }},
+            {{ label: "Queued Alerts", value: summary.queued_notifications }},
+            {{ label: "Dispatched Alerts", value: summary.dispatched_notifications }},
+            {{ label: "Failed Alerts", value: summary.failed_notifications }},
+            {{ label: "Retrying Alerts", value: summary.scheduled_retry_notifications }},
+            {{ label: "Silenced Groups", value: summary.silenced_notification_groups }},
+            {{ label: "Suppressed Dups", value: summary.suppressed_duplicates }},
+            {{ label: "Acked Alerts", value: summary.acknowledged_notifications }},
+            {{ label: "Unacked Alerts", value: summary.unacknowledged_notifications }},
+            {{ label: "Active Alerts", value: summary.active_notifications }},
+            {{ label: "Resolved Alerts", value: summary.resolved_notifications }},
+            {{ label: "Reopened Alerts", value: summary.reopened_notifications }},
+            {{ label: "Assigned Alerts", value: summary.assigned_notifications }},
+            {{ label: "Unassigned Alerts", value: summary.unassigned_notifications }},
+            {{ label: "Escalated Alerts", value: summary.escalated_notifications }},
+            {{ label: "Escalated Unowned", value: summary.escalated_unassigned_notifications }},
+            {{ label: "SLA Breached", value: summary.sla_breached_notifications }},
+          ],
+        }},
+        {{
+          title: "Research Snapshot",
+          note: "Latest run and order lifecycle health at a glance.",
+          metrics: [
+            {{ label: "Latest Symbol", value: summary.latest_symbol || "-" }},
+            {{ label: "Latest Return %", value: summary.latest_return_pct }},
+            {{ label: "Latest Sharpe", value: summary.latest_sharpe_ratio }},
+            {{ label: "Order Lifecycles", value: summary.total_lifecycles }},
+            {{ label: "Lifecycle Filled", value: summary.filled_lifecycles }},
+            {{ label: "Lifecycle Cancelled", value: summary.cancelled_lifecycles }},
+            {{ label: "Lifecycle Repriced", value: summary.repriced_lifecycles }},
+          ],
+        }},
+      ];
+      document.getElementById("summary-cards").innerHTML = `
+        <section class="summary-hero">
+          ${{primary.map(card => `
+            <article class="card ${{card.tone}}">
+              <div class="card-label">${{card.label}}</div>
+              <div class="card-value">${{fmt(card.value)}}</div>
+              <div class="card-note">${{card.note}}</div>
+            </article>
+          `).join("")}}
+        </section>
+        <section class="summary-groups">
+          ${{groups.map(group => `
+            <article class="summary-group">
+              <div class="summary-group-head">
+                <h3 class="summary-group-title">${{group.title}}</h3>
+                <div class="summary-group-note">${{group.note}}</div>
+              </div>
+              <div class="summary-group-grid">
+                ${{group.metrics.map(metric => `
+                  <div class="summary-mini">
+                    <div class="summary-mini-label">${{metric.label}}</div>
+                    <div class="summary-mini-value">${{fmt(metric.value)}}</div>
+                  </div>
+                `).join("")}}
+              </div>
+            </article>
+          `).join("")}}
+        </section>
+      `;
     }}
     function renderRuns() {{
       // Recent Runs 表让我们先确定“要看哪一次运行”。
