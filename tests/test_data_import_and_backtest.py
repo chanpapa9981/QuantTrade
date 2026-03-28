@@ -242,6 +242,8 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertIn("scheduled_retry_notifications", history_payload["history_summary"])
         self.assertIn("silenced_notification_groups", history_payload["history_summary"])
         self.assertIn("suppressed_duplicates", history_payload["history_summary"])
+        self.assertIn("acknowledged_notifications", history_payload["history_summary"])
+        self.assertIn("unacknowledged_notifications", history_payload["history_summary"])
         self.assertIn("request_anomalies", history_payload)
         self.assertIn("recent_notifications", history_payload)
 
@@ -777,6 +779,48 @@ class DataImportAndBacktestTestCase(unittest.TestCase):
         self.assertNotEqual(first["event_id"], second["event_id"])
         self.assertEqual(len(recent_notifications["notifications"]), 2)
         self.assertEqual(len(outbox_path.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_notification_ack_marks_event_reviewed(self) -> None:
+        """验证通知可以被显式确认，方便把未处理告警和已查看告警区分开。"""
+        base_dir = Path("var/test-artifacts/notification-ack")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        db_path = base_dir / "notification-ack.duckdb"
+        config_path = base_dir / "settings.yaml"
+        outbox_path = base_dir / "outbox.jsonl"
+        if db_path.exists():
+            db_path.unlink()
+        if outbox_path.exists():
+            outbox_path.unlink()
+
+        self._write_config(
+            config_path,
+            db_path,
+            notification_enabled=True,
+            notification_outbox_path=str(outbox_path),
+        )
+        app = QuantTradeApp(str(config_path))
+        created = app._record_notification(
+            severity="warning",
+            category="execution_retry_scheduled",
+            title="Backtest retry scheduled",
+            message="ack test",
+            symbol="AAPL",
+            timeframe="1d",
+        )
+
+        acked = app.acknowledge_notification(event_id=created["event_id"], note="checked by operator")
+        recent_notifications = app.recent_notification_events(limit=5)
+        history_payload = app.dashboard_history(runs_limit=5, events_limit=5)
+
+        self.assertEqual(created["delivery_status"], "queued")
+        self.assertIsNotNone(acked["notification"])
+        self.assertEqual(acked["notification"]["event_id"], created["event_id"])
+        self.assertTrue(acked["notification"]["acknowledged_at"])
+        self.assertEqual(acked["notification"]["acknowledged_note"], "checked by operator")
+        self.assertTrue(recent_notifications["notifications"][0]["acknowledged_at"])
+        self.assertEqual(recent_notifications["notifications"][0]["acknowledged_note"], "checked by operator")
+        self.assertEqual(history_payload["history_summary"]["acknowledged_notifications"], 1)
+        self.assertEqual(history_payload["history_summary"]["unacknowledged_notifications"], 0)
 
     def test_persist_backtest_run_blocks_when_protection_mode_requests_skip(self) -> None:
         """验证 protection mode 被触发且配置要求拦截时，本次调用会直接返回 blocked。"""

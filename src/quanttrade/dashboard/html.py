@@ -1196,7 +1196,9 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
                   <th>Suppressed</th>
                   <th>Next Try</th>
                   <th>Silenced Until</th>
+                  <th>Acked At</th>
                   <th>Provider</th>
+                  <th>Ack Note</th>
                   <th>Last Error</th>
                   <th>Execution</th>
                 </tr>
@@ -1354,6 +1356,8 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
         {{ label: "Retrying Alerts", value: summary.scheduled_retry_notifications }},
         {{ label: "Silenced Groups", value: summary.silenced_notification_groups }},
         {{ label: "Suppressed Dups", value: summary.suppressed_duplicates }},
+        {{ label: "Acked Alerts", value: summary.acknowledged_notifications }},
+        {{ label: "Unacked Alerts", value: summary.unacknowledged_notifications }},
         {{ label: "Execution Attempts", value: summary.total_executions }},
         {{ label: "Retry Scheduled", value: summary.retry_scheduled_executions }},
         {{ label: "Execution Failed", value: summary.failed_executions }},
@@ -1719,11 +1723,13 @@ def render_history_html(payload: dict[str, object], output_path: str) -> str:
           <td>${{fmt(event.suppressed_duplicate_count ?? 0)}}</td>
           <td>${{event.next_delivery_attempt_at || ""}}</td>
           <td>${{event.silenced_until || ""}}</td>
+          <td>${{event.acknowledged_at || ""}}</td>
           <td>${{event.provider}}</td>
+          <td>${{event.acknowledged_note || ""}}</td>
           <td>${{event.last_error || ""}}</td>
           <td>${{event.execution_id || ""}}</td>
         </tr>
-      `).join("") : '<tr><td colspan="12" class="muted">No notification events in the current view.</td></tr>';
+      `).join("") : '<tr><td colspan="14" class="muted">No notification events in the current view.</td></tr>';
     }}
     async function copyCurrentLink() {{
       // 优先用浏览器剪贴板 API；如果环境不支持，就退化成 prompt。

@@ -548,6 +548,8 @@ class BacktestRunRepository:
         silenced_until: str = "",
         suppressed_duplicate_count: int = 0,
         last_suppressed_at: str = "",
+        acknowledged_at: str = "",
+        acknowledged_note: str = "",
         symbol: str = "",
         timeframe: str = "",
         run_id: str = "",
@@ -573,8 +575,9 @@ class BacktestRunRepository:
                     event_id, timestamp, severity, category, title, message,
                     provider, delivery_status, delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                     notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
+                    acknowledged_at, acknowledged_note,
                     symbol, timeframe, run_id, execution_id, request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -594,6 +597,8 @@ class BacktestRunRepository:
                     silenced_until[:40],
                     max(int(suppressed_duplicate_count), 0),
                     last_suppressed_at[:40],
+                    acknowledged_at[:40],
+                    acknowledged_note[:500],
                     symbol[:40],
                     timeframe[:20],
                     run_id[:80],
@@ -617,6 +622,7 @@ class BacktestRunRepository:
                 SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
                        delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
+                       acknowledged_at, acknowledged_note,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 ORDER BY timestamp DESC
@@ -645,11 +651,13 @@ class BacktestRunRepository:
                 "silenced_until": row[14],
                 "suppressed_duplicate_count": row[15],
                 "last_suppressed_at": row[16],
-                "symbol": row[17],
-                "timeframe": row[18],
-                "run_id": row[19],
-                "execution_id": row[20],
-                "request_id": row[21],
+                "acknowledged_at": row[17],
+                "acknowledged_note": row[18],
+                "symbol": row[19],
+                "timeframe": row[20],
+                "run_id": row[21],
+                "execution_id": row[22],
+                "request_id": row[23],
             }
             for row in rows
         ]
@@ -672,6 +680,7 @@ class BacktestRunRepository:
                 SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
                        delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
+                       acknowledged_at, acknowledged_note,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 WHERE notification_key = ?
@@ -703,11 +712,13 @@ class BacktestRunRepository:
             "silenced_until": row[14],
             "suppressed_duplicate_count": row[15],
             "last_suppressed_at": row[16],
-            "symbol": row[17],
-            "timeframe": row[18],
-            "run_id": row[19],
-            "execution_id": row[20],
-            "request_id": row[21],
+            "acknowledged_at": row[17],
+            "acknowledged_note": row[18],
+            "symbol": row[19],
+            "timeframe": row[20],
+            "run_id": row[21],
+            "execution_id": row[22],
+            "request_id": row[23],
         }
 
     def mark_notification_duplicate_suppressed(
@@ -758,6 +769,7 @@ class BacktestRunRepository:
                 SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
                        delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                        notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
+                       acknowledged_at, acknowledged_note,
                        symbol, timeframe, run_id, execution_id, request_id
                 FROM notification_events
                 WHERE delivery_status IN ('queued', 'delivery_failed_retryable')
@@ -789,14 +801,36 @@ class BacktestRunRepository:
                 "silenced_until": row[14],
                 "suppressed_duplicate_count": row[15],
                 "last_suppressed_at": row[16],
-                "symbol": row[17],
-                "timeframe": row[18],
-                "run_id": row[19],
-                "execution_id": row[20],
-                "request_id": row[21],
+                "acknowledged_at": row[17],
+                "acknowledged_note": row[18],
+                "symbol": row[19],
+                "timeframe": row[20],
+                "run_id": row[21],
+                "execution_id": row[22],
+                "request_id": row[23],
             }
             for row in rows
         ]
+
+    def acknowledge_notification_event(self, event_id: str, note: str = "") -> None:
+        """把某条通知标记为已处理/已查看。"""
+        connection = connect_database(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE notification_events
+                SET acknowledged_at = ?,
+                    acknowledged_note = ?
+                WHERE event_id = ?
+                """,
+                (
+                    datetime.now(UTC).isoformat(),
+                    note[:500],
+                    event_id[:80],
+                ),
+            )
+        finally:
+            connection.close()
 
     def mark_notification_delivery_result(
         self,
@@ -1608,6 +1642,7 @@ class BacktestRunRepository:
                     SELECT event_id, timestamp, severity, category, title, message, provider, delivery_status,
                            delivery_target, delivery_attempts, delivered_at, last_error, next_delivery_attempt_at,
                            notification_key, silenced_until, suppressed_duplicate_count, last_suppressed_at,
+                           acknowledged_at, acknowledged_note,
                            symbol, timeframe, run_id, execution_id, request_id
                     FROM notification_events
                     ORDER BY timestamp DESC
@@ -1634,11 +1669,13 @@ class BacktestRunRepository:
                         "silenced_until": row[14],
                         "suppressed_duplicate_count": row[15],
                         "last_suppressed_at": row[16],
-                        "symbol": row[17],
-                        "timeframe": row[18],
-                        "run_id": row[19],
-                        "execution_id": row[20],
-                        "request_id": row[21],
+                        "acknowledged_at": row[17],
+                        "acknowledged_note": row[18],
+                        "symbol": row[19],
+                        "timeframe": row[20],
+                        "run_id": row[21],
+                        "execution_id": row[22],
+                        "request_id": row[23],
                     }
                     for row in notification_rows
                 ]

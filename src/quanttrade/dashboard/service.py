@@ -428,6 +428,12 @@ def build_history_payload(
                 [item for item in notification_events if int(item.get("suppressed_duplicate_count", 0)) > 0]
             ),
             "suppressed_duplicates": sum(int(item.get("suppressed_duplicate_count", 0)) for item in notification_events),
+            "acknowledged_notifications": len(
+                [item for item in notification_events if str(item.get("acknowledged_at", "")).strip()]
+            ),
+            "unacknowledged_notifications": len(
+                [item for item in notification_events if not str(item.get("acknowledged_at", "")).strip()]
+            ),
             "retry_scheduled_executions": len([item for item in executions if item.get("retry_decision") == "retry_scheduled"]),
             "failed_executions": len([item for item in executions if item.get("status") == "failed"]),
             "blocked_executions": len([item for item in executions if item.get("status") == "blocked"]),

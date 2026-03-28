@@ -636,6 +636,16 @@ class QuantTradeApp:
         history_payload = self.dashboard_history(runs_limit=5, events_limit=limit)
         return {"summary": history_payload["notification_summary"]}
 
+    def acknowledge_notification(self, event_id: str, note: str = "") -> dict[str, object]:
+        """确认某条通知已经被人查看或处理过。"""
+        with database_lock(self.settings.data.duckdb_path):
+            create_schema(self.settings.data.duckdb_path)
+            repository = BacktestRunRepository(self.settings.data.duckdb_path)
+            repository.acknowledge_notification_event(event_id=event_id, note=note)
+            refreshed = repository.fetch_recent_notification_events(limit=200)
+        matched = next((item for item in refreshed if item.get("event_id") == event_id), None)
+        return {"notification": matched}
+
     def deliver_notifications(self, limit: int = 20) -> dict[str, object]:
         """让通知 worker 处理待投递事件。
 
